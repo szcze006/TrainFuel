@@ -203,7 +203,35 @@ final class ProfileStore: ObservableObject {
             return "Stay consistent with your calorie and protein goals and adjust your meals around your training."
         }
     }
+
+
+    var hydrationRecommendation: String {
+        switch profile.sport {
+        case "Soccer":
+            return "Hydration Tip: Drink water throughout the day and make sure you are hydrated before practices and games."
+
+        case "Basketball":
+            return "Hydration Tip: Keep water available during training and replace fluids after intense sessions."
+
+        case "Football":
+            return "Hydration Tip: Hydration is especially important during long practices and hot weather."
+
+        case "Running":
+            return "Hydration Tip: Drink consistently throughout the day and pay extra attention to fluids during longer runs."
+
+        case "Volleyball":
+            return "Hydration Tip: Stay hydrated before practice and drink fluids during longer training sessions."
+
+        case "Weight Training":
+            return "Hydration Tip: Drink water before, during, and after your workout to support training and recovery."
+
+        default:
+            return "Hydration Tip: Drink water consistently throughout the day, especially around exercise."
+        }
+    }
 }
+
+
 
 
 // MARK: - ROOT
@@ -937,6 +965,11 @@ struct DashboardView: View {
 
                         Text(profileStore.recommendation)
                             .foregroundStyle(Color.secondary)
+                        
+                        Text(profileStore.hydrationRecommendation)
+                            .font(.subheadline)
+                            .fontWeight(.medium)
+                            .foregroundStyle(Color.trainBlue)
 
                         Divider()
 
