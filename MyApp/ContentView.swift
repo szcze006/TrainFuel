@@ -925,7 +925,8 @@ struct MainTabView: View {
 
                     ProgressScreen(
                         mealStore: mealStore,
-                        profileStore: profileStore
+                        profileStore: profileStore,
+                        workoutStore: workoutStore
                     )
                     .tabItem {
                         Label(
@@ -1653,6 +1654,7 @@ struct ProgressScreen: View {
 
     @ObservedObject var mealStore: MealStore
     @ObservedObject var profileStore: ProfileStore
+    @ObservedObject var workoutStore: WorkoutStore
 
     var calorieProgress: Int {
 
@@ -1732,6 +1734,27 @@ struct ProgressScreen: View {
                             value: "\(profileStore.profile.trainingDays)x/week"
                         )
                     }
+                    
+                    VStack(alignment: .leading, spacing: 12) {
+
+                        Text("Training Summary")
+                            .font(.title2.bold())
+
+                        SummaryRow(
+                            title: "Workouts Completed",
+                            value: "\(workoutStore.workouts.count)"
+                        )
+
+                        Divider()
+
+                        SummaryRow(
+                            title: "Total Training Time",
+                            value: "\(workoutStore.workouts.reduce(0) { $0 + $1.duration }) min"
+                        )
+                    }
+                    .padding(20)
+                    .background(Color.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 18))
 
                     VStack(alignment: .leading, spacing: 12) {
 
