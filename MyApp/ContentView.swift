@@ -172,7 +172,166 @@ final class MealStore: ObservableObject {
             }
     }
 }
+// MARK: - WORKOUT MODEL
+struct WorkoutEntry: Identifiable, Codable {
+    var id = UUID()
+    let name: String
+    let type: String
+    let duration: Int
+    let date: Date
+}
 
+// MARK: - WORKOUT STORE
+
+final class WorkoutStore: ObservableObject {
+
+    @Published var workouts: [WorkoutEntry] = []
+
+    private let db = Firestore.firestore()
+
+    init() {
+        loadWorkoutsFromFirebase()
+    }
+
+    // MARK: - Add Workout
+
+    func addWorkout(
+        name: String,
+        type: String,
+        duration: Int
+    ) {
+
+        guard let uid = Auth.auth().currentUser?.uid else {
+            print("No logged-in user.")
+            return
+        }
+
+        let workout = WorkoutEntry(
+            name: name,
+            type: type,
+            duration: duration,
+            date: Date()
+        )
+
+        // Show immediately in the app
+        workouts.append(workout)
+
+        let workoutData: [String: Any] = [
+            "name": workout.name,
+            "type": workout.type,
+            "duration": workout.duration,
+            "date": FirebaseFirestore.Timestamp(date: workout.date)
+        ]
+
+        db.collection("users")
+            .document(uid)
+            .collection("workouts")
+            .document(workout.id.uuidString)
+            .setData(workoutData) { error in
+
+                if let error = error {
+                    print(
+                        "Error saving workout: \(error.localizedDescription)"
+                    )
+                } else {
+                    print("Workout successfully saved to Firestore.")
+                }
+            }
+    }
+
+    // MARK: - Delete Workout
+
+    func deleteWorkouts(at offsets: IndexSet) {
+
+        guard let uid = Auth.auth().currentUser?.uid else {
+            return
+        }
+
+        for index in offsets {
+
+            let workout = workouts[index]
+
+            db.collection("users")
+                .document(uid)
+                .collection("workouts")
+                .document(workout.id.uuidString)
+                .delete { error in
+
+                    if let error = error {
+                        print(
+                            "Error deleting workout: \(error.localizedDescription)"
+                        )
+                    } else {
+                        print("Workout deleted from Firestore.")
+                    }
+                }
+        }
+
+        workouts.remove(atOffsets: offsets)
+    }
+
+    // MARK: - Load Workouts
+
+    private func loadWorkoutsFromFirebase() {
+
+        guard let uid = Auth.auth().currentUser?.uid else {
+            print("No logged-in user.")
+            return
+        }
+
+        db.collection("users")
+            .document(uid)
+            .collection("workouts")
+            .getDocuments { snapshot, error in
+
+                if let error = error {
+                    print(
+                        "Error loading workouts: \(error.localizedDescription)"
+                    )
+                    return
+                }
+
+                guard let documents = snapshot?.documents else {
+                    return
+                }
+
+                let loadedWorkouts = documents.compactMap {
+                    document -> WorkoutEntry? in
+
+                    let data = document.data()
+
+                    guard
+                        let name = data["name"] as? String,
+                        let type = data["type"] as? String,
+                        let duration = data["duration"] as? Int,
+                        let timestamp =
+                            data["date"]
+                            as? FirebaseFirestore.Timestamp
+                    else {
+                        return nil
+                    }
+
+                    return WorkoutEntry(
+                        id: UUID(
+                            uuidString: document.documentID
+                        ) ?? UUID(),
+                        name: name,
+                        type: type,
+                        duration: duration,
+                        date: timestamp.dateValue()
+                    )
+                }
+
+                DispatchQueue.main.async {
+                    self.workouts = loadedWorkouts
+
+                    print(
+                        "Workouts successfully loaded from Firestore."
+                    )
+                }
+            }
+    }
+}
 // MARK: - FITNESS PROFILE
 
 struct FitnessProfile: Codable {
@@ -737,6 +896,7 @@ struct MainTabView: View {
 
     @StateObject private var mealStore = MealStore()
     @StateObject private var profileStore = ProfileStore()
+    @StateObject private var workoutStore = WorkoutStore()
 
     var body: some View {
 
@@ -758,10 +918,15 @@ struct MainTabView: View {
                         .tabItem {
                             Label("Nutrition", systemImage: "fork.knife")
                         }
+                    FitnessView(workoutStore: workoutStore)
+                        .tabItem {
+                            Label("Fitness", systemImage: "figure.run")
+                        }
 
                     ProgressScreen(
                         mealStore: mealStore,
-                        profileStore: profileStore
+                        profileStore: profileStore,
+                        workoutStore: workoutStore
                     )
                     .tabItem {
                         Label(
@@ -1489,6 +1654,7 @@ struct ProgressScreen: View {
 
     @ObservedObject var mealStore: MealStore
     @ObservedObject var profileStore: ProfileStore
+    @ObservedObject var workoutStore: WorkoutStore
 
     var calorieProgress: Int {
 
@@ -1568,6 +1734,27 @@ struct ProgressScreen: View {
                             value: "\(profileStore.profile.trainingDays)x/week"
                         )
                     }
+                    
+                    VStack(alignment: .leading, spacing: 12) {
+
+                        Text("Training Summary")
+                            .font(.title2.bold())
+
+                        SummaryRow(
+                            title: "Workouts Completed",
+                            value: "\(workoutStore.workouts.count)"
+                        )
+
+                        Divider()
+
+                        SummaryRow(
+                            title: "Total Training Time",
+                            value: "\(workoutStore.workouts.reduce(0) { $0 + $1.duration }) min"
+                        )
+                    }
+                    .padding(20)
+                    .background(Color.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 18))
 
                     VStack(alignment: .leading, spacing: 12) {
 
@@ -1966,6 +2153,304 @@ struct ProfileRow: View {
     }
 }
 
+// MARK: - FITNESS
+
+// MARK: - FITNESS
+
+struct FitnessView: View {
+    
+    @ObservedObject var workoutStore: WorkoutStore
+
+    @State private var showAddWorkout = false
+
+    var body: some View {
+
+        NavigationStack {
+
+            ScrollView {
+
+                VStack(alignment: .leading, spacing: 20) {
+
+                    // MARK: Header
+
+                    VStack(alignment: .leading, spacing: 8) {
+
+                        Image(systemName: "figure.run.circle.fill")
+                            .font(.system(size: 70))
+                            .foregroundStyle(Color.trainBlue)
+
+                        Text("Fitness")
+                            .font(.largeTitle.bold())
+
+                        Text("Track your workouts and training.")
+                            .foregroundStyle(Color.secondary)
+                    }
+
+                    // MARK: Today's Workout
+
+                    VStack(alignment: .leading, spacing: 12) {
+
+                        Label(
+                            "Today's Workout",
+                            systemImage: "figure.run"
+                        )
+                        .font(.headline)
+                        .foregroundStyle(Color.trainBlue)
+
+                        let todaysWorkouts = workoutStore.workouts.filter {
+                            Calendar.current.isDateInToday($0.date)
+                        }
+
+                        if todaysWorkouts.isEmpty {
+
+                            Text("No workout logged yet")
+                                .font(.title3.bold())
+
+                            Text(
+                                "Log your workout to keep track of your training."
+                            )
+                            .foregroundStyle(Color.secondary)
+
+                        } else {
+
+                            ForEach(todaysWorkouts) { workout in
+
+                                WorkoutRow(workout: workout)
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(20)
+                    .background(Color.white)
+                    .clipShape(
+                        RoundedRectangle(cornerRadius: 18)
+                    )
+
+                    // MARK: All Workouts
+
+                    VStack(alignment: .leading, spacing: 12) {
+
+                        Label(
+                            "Your Workouts",
+                            systemImage: "list.bullet"
+                        )
+                        .font(.headline)
+                        .foregroundStyle(Color.trainBlue)
+
+                        if workoutStore.workouts.isEmpty {
+
+                            Text("No workouts logged yet.")
+                                .foregroundStyle(Color.secondary)
+
+                        } else {
+
+                            ForEach(workoutStore.workouts.sorted {
+                                $0.date > $1.date
+                            }) { workout in
+
+                                WorkoutRow(workout: workout)
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(20)
+                    .background(Color.white)
+                    .clipShape(
+                        RoundedRectangle(cornerRadius: 18)
+                    )
+
+                    // MARK: Log Workout Button
+
+                    Button {
+                        showAddWorkout = true
+                    } label: {
+
+                        Label(
+                            "Log Workout",
+                            systemImage: "plus.circle.fill"
+                        )
+                        .fontWeight(.bold)
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(Color.trainBlue)
+                        .foregroundStyle(Color.white)
+                        .clipShape(
+                            RoundedRectangle(cornerRadius: 15)
+                        )
+                    }
+                }
+                .padding()
+            }
+            .background(Color.trainBackground)
+            .navigationTitle("Fitness")
+            .sheet(isPresented: $showAddWorkout) {
+                AddWorkoutView(
+                    workoutStore: workoutStore
+                )
+            }
+        }
+    }
+}
+
+struct WorkoutRow: View {
+
+    let workout: WorkoutEntry
+
+    var body: some View {
+
+        HStack(spacing: 15) {
+
+            Image(systemName: iconForWorkout)
+                .font(.title2)
+                .foregroundStyle(Color.trainBlue)
+                .frame(width: 40)
+
+            VStack(alignment: .leading, spacing: 4) {
+
+                Text(workout.name)
+                    .font(.headline)
+
+                Text(workout.type)
+                    .font(.subheadline)
+                    .foregroundStyle(Color.secondary)
+
+                Text(
+                    "\(workout.duration) minutes"
+                )
+                .font(.caption)
+                .foregroundStyle(Color.secondary)
+            }
+
+            Spacer()
+
+            Text(
+                workout.date.formatted(
+                    date: .abbreviated,
+                    time: .shortened
+                )
+            )
+            .font(.caption)
+            .foregroundStyle(Color.secondary)
+        }
+        .padding(.vertical, 6)
+    }
+
+    private var iconForWorkout: String {
+
+        switch workout.type {
+
+        case "Strength":
+            return "dumbbell.fill"
+
+        case "Cardio":
+            return "heart.fill"
+
+        case "Running":
+            return "figure.run"
+
+        case "Sports":
+            return "sportscourt.fill"
+
+        case "Mobility":
+            return "figure.flexibility"
+
+        default:
+            return "figure.mixed.cardio"
+        }
+    }
+}
+// MARK: - ADD WORKOUT
+
+struct AddWorkoutView: View {
+
+    @Environment(\.dismiss) private var dismiss
+    
+    @ObservedObject var workoutStore: WorkoutStore
+
+    @State private var workoutName = ""
+    @State private var workoutType = "Strength"
+    @State private var duration = ""
+
+    let workoutTypes = [
+        "Strength",
+        "Cardio",
+        "Running",
+        "Sports",
+        "Mobility",
+        "Other"
+    ]
+
+    var body: some View {
+
+        NavigationStack {
+
+            Form {
+
+                Section("Workout Information") {
+
+                    TextField(
+                        "Workout Name",
+                        text: $workoutName
+                    )
+
+                    Picker(
+                        "Workout Type",
+                        selection: $workoutType
+                    ) {
+                        ForEach(workoutTypes, id: \.self) {
+                            Text($0)
+                        }
+                    }
+
+                    TextField(
+                        "Duration (minutes)",
+                        text: $duration
+                    )
+                    .keyboardType(.numberPad)
+                }
+
+                Section {
+
+                    Button("Save Workout") {
+
+                        guard let durationValue = Int(duration) else {
+                            return
+                        }
+
+                        workoutStore.addWorkout(
+                            name: workoutName,
+                            type: workoutType,
+                            duration: durationValue
+                        )
+
+                        dismiss()
+                    }
+                    .fontWeight(.bold)
+                    .disabled(
+                        workoutName
+                            .trimmingCharacters(
+                                in: .whitespaces
+                            )
+                            .isEmpty
+                        || Int(duration) == nil
+                    )
+                }
+            }
+            .navigationTitle("Log Workout")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+
+                ToolbarItem(
+                    placement: .cancellationAction
+                ) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
+}
 
 // MARK: - PREVIEW
 
