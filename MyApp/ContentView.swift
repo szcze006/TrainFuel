@@ -1,5 +1,6 @@
 import SwiftUI
 import FirebaseAuth
+import FirebaseFirestore
 import Combine
 
 // MARK: - COLORS
@@ -26,67 +27,149 @@ struct FoodEntry: Identifiable, Codable {
 // MARK: - MEAL STORE
 
 final class MealStore: ObservableObject {
-
-    @Published var foods: [FoodEntry] = [] {
-        didSet {
-            saveMeals()
-        }
-    }
-
-    private var storageKey: String {
-        let uid = Auth.auth().currentUser?.uid ?? "guest"
-        return "trainfuel_meals_\(uid)"
-    }
-
+    
+    @Published var foods: [FoodEntry] = []
+    
+    private let db = Firestore.firestore()
+    
     init() {
-        loadMeals()
+        loadMealsFromFirebase()
     }
-
+    
     var totalCalories: Int {
         foods.reduce(0) { $0 + $1.calories }
     }
-
+    
     var totalProtein: Int {
         foods.reduce(0) { $0 + $1.protein }
     }
-
+    
     var totalCarbs: Int {
         foods.reduce(0) { $0 + $1.carbs }
     }
-
+    
     var totalFat: Int {
         foods.reduce(0) { $0 + $1.fat }
     }
-
+    
+    // MARK: - Add Meal
+    
     func addMeal(_ meal: FoodEntry) {
+        
+        // Immediately show the meal in the app
         foods.append(meal)
+        
+        // Make sure the user is logged in
+        guard let uid = Auth.auth().currentUser?.uid else {
+            print("No logged-in user.")
+            return
+        }
+        
+        // Data that will be stored in Firestore
+        let mealData: [String: Any] = [
+            "name": meal.name,
+            "calories": meal.calories,
+            "protein": meal.protein,
+            "carbs": meal.carbs,
+            "fat": meal.fat,
+            "date": Timestamp(date: Date())
+        ]
+        
+        // users → UID → meals → meal ID
+        db.collection("users")
+            .document(uid)
+            .collection("meals")
+            .document(meal.id.uuidString)
+            .setData(mealData) { error in
+                
+                if let error = error {
+                    print("Error saving meal: \(error.localizedDescription)")
+                } else {
+                    print("Meal successfully saved to Firestore.")
+                }
+            }
     }
-
+    
+    // MARK: - Delete Meal
+    
     func deleteMeals(at offsets: IndexSet) {
+        
+        guard let uid = Auth.auth().currentUser?.uid else {
+            return
+        }
+        
+        for index in offsets {
+            
+            let meal = foods[index]
+            
+            db.collection("users")
+                .document(uid)
+                .collection("meals")
+                .document(meal.id.uuidString)
+                .delete { error in
+                    
+                    if let error = error {
+                        print("Error deleting meal: \(error.localizedDescription)")
+                    } else {
+                        print("Meal deleted from Firestore.")
+                    }
+                }
+        }
+        
         foods.remove(atOffsets: offsets)
     }
-
-    private func saveMeals() {
-        guard let data = try? JSONEncoder().encode(foods) else {
+    
+    // MARK: - Load Meals
+    
+    private func loadMealsFromFirebase() {
+        
+        guard let uid = Auth.auth().currentUser?.uid else {
+            print("No logged-in user.")
             return
         }
-
-        UserDefaults.standard.set(data, forKey: storageKey)
-    }
-
-    private func loadMeals() {
-        guard
-            let data = UserDefaults.standard.data(forKey: storageKey),
-            let savedFoods = try? JSONDecoder().decode(
-                [FoodEntry].self,
-                from: data
-            )
-        else {
-            foods = []
-            return
-        }
-
-        foods = savedFoods
+        
+        db.collection("users")
+            .document(uid)
+            .collection("meals")
+            .getDocuments { snapshot, error in
+                
+                if let error = error {
+                    print("Error loading meals: \(error.localizedDescription)")
+                    return
+                }
+                
+                guard let documents = snapshot?.documents else {
+                    return
+                }
+                
+                let loadedMeals = documents.compactMap { document -> FoodEntry? in
+                    
+                    let data = document.data()
+                    
+                    guard
+                        let name = data["name"] as? String,
+                        let calories = data["calories"] as? Int,
+                        let protein = data["protein"] as? Int,
+                        let carbs = data["carbs"] as? Int,
+                        let fat = data["fat"] as? Int
+                    else {
+                        return nil
+                    }
+                    
+                    return FoodEntry(
+                        id: UUID(uuidString: document.documentID) ?? UUID(),
+                        name: name,
+                        calories: calories,
+                        protein: protein,
+                        carbs: carbs,
+                        fat: fat
+                    )
+                }
+                
+                DispatchQueue.main.async {
+                    self.foods = loadedMeals
+                }
+            }
     }
 }
 // MARK: - WORKOUT MODEL
@@ -165,7 +248,6 @@ final class WorkoutStore: ObservableObject {
 }
 
 
-
 // MARK: - FITNESS PROFILE
 
 struct FitnessProfile: Codable {
@@ -187,52 +269,126 @@ final class ProfileStore: ObservableObject {
 
     @Published var profile: FitnessProfile {
         didSet {
-            saveProfile()
+            saveProfileToFirebase()
         }
     }
 
-    private var storageKey: String {
-        let uid = Auth.auth().currentUser?.uid ?? "guest"
-        return "trainfuel_profile_\(uid)"
-    }
+    private let db = Firestore.firestore()
 
     init() {
-        let uid = Auth.auth().currentUser?.uid ?? "guest"
-        let key = "trainfuel_profile_\(uid)"
-
-        if let data = UserDefaults.standard.data(forKey: key),
-           let savedProfile = try? JSONDecoder().decode(
-                FitnessProfile.self,
-                from: data
-           ) {
-            profile = savedProfile
-        } else {
-            profile = FitnessProfile()
-        }
+        profile = FitnessProfile()
+        loadProfileFromFirebase()
     }
 
-    private func saveProfile() {
-        guard let data = try? JSONEncoder().encode(profile) else {
+    private var userID: String? {
+        Auth.auth().currentUser?.uid
+    }
+
+    private var profileReference: DocumentReference? {
+        guard let uid = userID else {
+            return nil
+        }
+
+        return db
+            .collection("users")
+            .document(uid)
+            .collection("profile")
+            .document("profile")
+    }
+
+    // MARK: - Save Profile
+
+    private func saveProfileToFirebase() {
+
+        guard let profileReference = profileReference else {
+            print("No logged-in user. Profile was not saved.")
             return
         }
 
-        UserDefaults.standard.set(data, forKey: storageKey)
+        let profileData: [String: Any] = [
+            "sport": profile.sport,
+            "goal": profile.goal,
+            "trainingDays": profile.trainingDays,
+            "calorieGoal": profile.calorieGoal,
+            "proteinGoal": profile.proteinGoal
+        ]
+
+        profileReference.setData(profileData) { error in
+
+            if let error = error {
+                print(
+                    "Error saving profile: \(error.localizedDescription)"
+                )
+            } else {
+                print("Profile successfully saved to Firestore.")
+            }
+        }
     }
+
+    // MARK: - Load Profile
+
+    private func loadProfileFromFirebase() {
+
+        guard let profileReference = profileReference else {
+            print("No logged-in user. Cannot load profile.")
+            return
+        }
+
+        profileReference.getDocument { document, error in
+
+            if let error = error {
+                print(
+                    "Error loading profile: \(error.localizedDescription)"
+                )
+                return
+            }
+
+            guard
+                let document = document,
+                document.exists,
+                let data = document.data()
+            else {
+                print("No profile found in Firestore.")
+                return
+            }
+
+            let loadedProfile = FitnessProfile(
+                sport: data["sport"] as? String ?? "",
+                goal: data["goal"] as? String ?? "",
+                trainingDays: data["trainingDays"] as? Int ?? 4,
+                calorieGoal: data["calorieGoal"] as? Int ?? 2500,
+                proteinGoal: data["proteinGoal"] as? Int ?? 180
+            )
+
+            DispatchQueue.main.async {
+                self.profile = loadedProfile
+                print("Profile successfully loaded from Firestore.")
+            }
+        }
+    }
+
+    // MARK: - Recommendations
 
     var recommendationTitle: String {
         switch profile.sport {
         case "Soccer":
             return "Soccer Fuel Plan"
+
         case "Basketball":
             return "Basketball Fuel Plan"
+
         case "Football":
             return "Football Fuel Plan"
+
         case "Running":
             return "Running Fuel Plan"
+
         case "Volleyball":
             return "Volleyball Fuel Plan"
+
         case "Weight Training":
             return "Strength Fuel Plan"
+
         default:
             return "Your Fuel Plan"
         }
@@ -275,11 +431,10 @@ final class ProfileStore: ObservableObject {
             return "Use carbohydrates for training energy and spread protein throughout the day to support recovery."
 
         default:
-            return "Stay consistent with your calorie and protein goals and adjust your meals around your training."
+            return "Build balanced meals around your training goals and stay consistent with your nutrition."
         }
     }
-
-
+    
     var hydrationRecommendation: String {
         switch profile.sport {
         case "Soccer":
@@ -305,8 +460,6 @@ final class ProfileStore: ObservableObject {
         }
     }
 }
-
-
 
 
 // MARK: - ROOT
@@ -1409,7 +1562,6 @@ struct AddMealView: View {
         dismiss()
     }
 }
-
 
 // MARK: - PROGRESS
 
