@@ -182,24 +182,29 @@ struct WorkoutEntry: Identifiable, Codable {
 }
 
 // MARK: - WORKOUT STORE
+
 final class WorkoutStore: ObservableObject {
 
     @Published var workouts: [WorkoutEntry] = []
 
-    private let storageKey: String
+    private let db = Firestore.firestore()
 
     init() {
-        let uid = Auth.auth().currentUser?.uid ?? "guest"
-        storageKey = "workouts_\(uid)"
-
-        loadWorkouts()
+        loadWorkoutsFromFirebase()
     }
+
+    // MARK: - Add Workout
 
     func addWorkout(
         name: String,
         type: String,
         duration: Int
     ) {
+
+        guard let uid = Auth.auth().currentUser?.uid else {
+            print("No logged-in user.")
+            return
+        }
 
         let workout = WorkoutEntry(
             name: name,
@@ -208,46 +213,125 @@ final class WorkoutStore: ObservableObject {
             date: Date()
         )
 
+        // Show immediately in the app
         workouts.append(workout)
 
-        saveWorkouts()
+        let workoutData: [String: Any] = [
+            "name": workout.name,
+            "type": workout.type,
+            "duration": workout.duration,
+            "date": FirebaseFirestore.Timestamp(date: workout.date)
+        ]
+
+        db.collection("users")
+            .document(uid)
+            .collection("workouts")
+            .document(workout.id.uuidString)
+            .setData(workoutData) { error in
+
+                if let error = error {
+                    print(
+                        "Error saving workout: \(error.localizedDescription)"
+                    )
+                } else {
+                    print("Workout successfully saved to Firestore.")
+                }
+            }
     }
+
+    // MARK: - Delete Workout
 
     func deleteWorkouts(at offsets: IndexSet) {
 
-        workouts.remove(atOffsets: offsets)
-
-        saveWorkouts()
-    }
-
-    private func saveWorkouts() {
-
-        if let encoded = try? JSONEncoder().encode(workouts) {
-            UserDefaults.standard.set(
-                encoded,
-                forKey: storageKey
-            )
-        }
-    }
-
-    private func loadWorkouts() {
-
-        guard let data = UserDefaults.standard.data(
-            forKey: storageKey
-        ) else {
+        guard let uid = Auth.auth().currentUser?.uid else {
             return
         }
 
-        if let decoded = try? JSONDecoder().decode(
-            [WorkoutEntry].self,
-            from: data
-        ) {
-            workouts = decoded
+        for index in offsets {
+
+            let workout = workouts[index]
+
+            db.collection("users")
+                .document(uid)
+                .collection("workouts")
+                .document(workout.id.uuidString)
+                .delete { error in
+
+                    if let error = error {
+                        print(
+                            "Error deleting workout: \(error.localizedDescription)"
+                        )
+                    } else {
+                        print("Workout deleted from Firestore.")
+                    }
+                }
         }
+
+        workouts.remove(atOffsets: offsets)
+    }
+
+    // MARK: - Load Workouts
+
+    private func loadWorkoutsFromFirebase() {
+
+        guard let uid = Auth.auth().currentUser?.uid else {
+            print("No logged-in user.")
+            return
+        }
+
+        db.collection("users")
+            .document(uid)
+            .collection("workouts")
+            .getDocuments { snapshot, error in
+
+                if let error = error {
+                    print(
+                        "Error loading workouts: \(error.localizedDescription)"
+                    )
+                    return
+                }
+
+                guard let documents = snapshot?.documents else {
+                    return
+                }
+
+                let loadedWorkouts = documents.compactMap {
+                    document -> WorkoutEntry? in
+
+                    let data = document.data()
+
+                    guard
+                        let name = data["name"] as? String,
+                        let type = data["type"] as? String,
+                        let duration = data["duration"] as? Int,
+                        let timestamp =
+                            data["date"]
+                            as? FirebaseFirestore.Timestamp
+                    else {
+                        return nil
+                    }
+
+                    return WorkoutEntry(
+                        id: UUID(
+                            uuidString: document.documentID
+                        ) ?? UUID(),
+                        name: name,
+                        type: type,
+                        duration: duration,
+                        date: timestamp.dateValue()
+                    )
+                }
+
+                DispatchQueue.main.async {
+                    self.workouts = loadedWorkouts
+
+                    print(
+                        "Workouts successfully loaded from Firestore."
+                    )
+                }
+            }
     }
 }
-
-
 // MARK: - FITNESS PROFILE
 
 struct FitnessProfile: Codable {
