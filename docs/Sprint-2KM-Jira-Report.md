@@ -122,6 +122,6 @@ All 39 story points in the final Sprint 2 scope were completed.
 
 ## Jira Evidence Links
 
-- **Sprint Report:** [ADD SPRINT 2 REPORT LINK AFTER COMPLETING SPRINT]
+- **Sprint Report:** [https://rangers-team-ik0pzjj8.atlassian.net/jira/software/projects/TFUEL/boards/1/reports/burndown?source=overview&atlOrigin=eyJpIjoiZTAzYTI5MjBiOWNlNDBhN2IwOGJkZWNlZDU2MzhmMDIiLCJwIjoiaiJ9](https://rangers-team-ik0pzjj8.atlassian.net/jira/software/projects/TFUEL/boards/1/reports/burndown?source=overview&atlOrigin=eyJpIjoiZTAzYTI5MjBiOWNlNDBhN2IwOGJkZWNlZDU2MzhmMDIiLCJwIjoiaiJ9)
 - **Backlog:** [https://rangers-team-ik0pzjj8.atlassian.net/jira/software/projects/TFUEL/boards/1/backlog](https://rangers-team-ik0pzjj8.atlassian.net/jira/software/projects/TFUEL/boards/1/backlog)
 - **Sprint Board:** [https://rangers-team-ik0pzjj8.atlassian.net/jira/software/projects/TFUEL/boards/1?filter=&groupBy=none](https://rangers-team-ik0pzjj8.atlassian.net/jira/software/projects/TFUEL/boards/1?filter=&groupBy=none)
