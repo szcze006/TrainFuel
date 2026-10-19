@@ -1,3 +1,5 @@
+// xcode: set sdk=iOS
+
 import SwiftUI
 import FirebaseAuth
 import FirebaseFirestore
@@ -918,6 +920,18 @@ struct MainTabView: View {
                         .tabItem {
                             Label("Nutrition", systemImage: "fork.knife")
                         }
+                    TrainingPlanView(profileStore: profileStore, workoutStore: workoutStore)
+                        .tabItem { Label("Plan", systemImage: "calendar") }
+                  
+                    PerformanceHubView(
+                        profileStore: profileStore,
+                        workoutStore: workoutStore,
+                        mealStore: mealStore
+                    )
+                    .tabItem {
+                        Label("Performance", systemImage: "chart.bar.fill")
+                    }
+
                     FitnessView(workoutStore: workoutStore)
                         .tabItem {
                             Label("Fitness", systemImage: "figure.run")
