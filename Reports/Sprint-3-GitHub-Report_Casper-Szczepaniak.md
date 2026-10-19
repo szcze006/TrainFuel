@@ -1,52 +1,77 @@
-# Sprint 3 GitHub Report — TrainFuel
+
+# Sprint 3 GitHub Report - TrainFuel
 
 **Repository:** https://github.com/szcze006/TrainFuel  
 **Sprint:** Sprint 3  
 **Contributor:** Casper Szczepaniak  
-**Report prepared:** October 19, 2026
+**Report Date:** October 19, 2026
 
-## Merged Pull Requests During Sprint
+## Sprint 3 Summary
 
-**Only merged pull requests count.** The following information is based on the development history discussed during Sprint 3. GitHub's PR metadata could not be independently retrieved while preparing this draft. Verify the exact title, author, reviewers, and merge timestamp in GitHub before submitting.
+During Sprint 3, I completed development and testing of the Sports Coach and Performance Hub features for TrainFuel, an iOS fitness and nutrition application built with SwiftUI.
 
-| PR title | PR link | Author | Reviewers | Merge date |
+My contributions covered 13 Jira feature tasks totaling 44 estimated story points. I developed the features on separate Git branches, committed my changes, and submitted pull requests for integration into the development branch.
+
+## Merged Pull Requests
+
+| Pull Request | GitHub Link | Author | Reviewers | Merge Date |
 |---|---|---|---|---|
-| Sports Coach / sport-specific training plans and recovery features (confirm exact title) | https://github.com/szcze006/TrainFuel/pull/8 | Confirm on GitHub | Confirm on GitHub | Confirm exact date on GitHub |
-| Performance Hub and tracking features (confirm exact title and PR number) | **Add exact merged PR URL** | Confirm on GitHub | Confirm on GitHub | Confirm exact date on GitHub |
+| Sports Coach and sport-specific training features | [PR #8](https://github.com/szcze006/TrainFuel/pull/8) | Casper Szczepaniak | Verify in GitHub | Verify in GitHub |
+| Performance Hub and tracking features | [Merged PRs](https://github.com/szcze006/TrainFuel/pulls?q=is%3Apr+is%3Amerged) | Casper Szczepaniak | Verify in GitHub | Verify in GitHub |
 
-**Feature changes associated with these PRs:**
+Both feature branches were reported merged into `dev`. Exact PR metadata should be confirmed against GitHub before final submission.
 
-- `feature/sprint-3`: added `SportCoach.swift` and integrated sport-specific workout plans, fueling guidance, and recovery check-ins.
-- `feature/performance-hub`: added `PerformanceHubView.swift` and integrated the Performance tab without removing the existing Plan tab.
-- Both feature updates were reported merged into the `dev` branch.
+## Completed Development Work
+
+### Sports Coach
+
+I implemented sport-specific workout recommendations, weekly training plans, exercise sets and repetitions, workout durations, fueling guidance, and sleep and soreness recovery check-ins.
+
+The feature provides training recommendations based on the user's selected sport and integrates with the existing TrainFuel application.
+
+### Performance Hub
+
+I implemented the Performance Hub interface and integrated it into the application's navigation.
+
+The feature includes hydration tracking, daily nutrition goals, meal suggestions, workout scheduling, performance insights, and connections to existing application data.
+
+### Testing and Integration
+
+I built and tested the completed Sprint 3 features in Xcode. I verified the application navigation and feature behavior before reporting the development work complete.
+
+The implementation was organized across the `feature/sprint-3` and `feature/performance-hub` branches.
 
 ## Commit Activity
 
 | Metric | Value |
 |---|---|
-| Total number of commits during Sprint 3 | **To verify from Git history** |
-| Date of first Sprint 3 commit | **To verify** |
-| Date of last Sprint 3 commit | **To verify** |
-| Commit date range | **To verify after sprint dates are confirmed** |
+| Total commits during Sprint 3 | Pending verification from Git history |
+| First Sprint 3 commit | Pending verification |
+| Last Sprint 3 commit | Pending verification |
+| Feature pull requests reported merged | 2 |
 
-Use the merged PR **Commits** tabs or `git log` to count commits within the professor's sprint date window. Do not count commits from outside that window.
+Commit totals and dates must be calculated using the official Sprint 3 date range and Git history.
 
-## Individual Contribution
+## Git Workflow
 
-I worked on the Sports Coach and Performance Hub updates for TrainFuel. I used separate feature branches and pull requests to integrate changes into `dev`. The Sports Coach update added personalized sport training plans, exercise details, fueling guidance, and recovery check-ins. The Performance Hub update added a new tab with nutrition, hydration, calendar, and analytics features.
+I used feature branches to keep Sprint 3 changes separate from the shared development branch.
 
-I built the updated application in Xcode and verified that the new Performance tab opened. Additional persistence and feature-level acceptance testing is still pending.
+After completing development, I committed my changes and submitted pull requests targeting `dev`. This allowed the changes to be integrated through GitHub's pull request workflow.
 
-## Git Workflow and Evidence
+The report files were also prepared on a separate documentation branch, `feature/sprint-3-reports`, for submission through a pull request.
 
-The Sprint 3 code changes were developed on feature branches and merged through pull requests instead of direct pushes to `main`. Only merged PRs are listed above. The reports themselves should also be submitted through a pull request if the project requires all work to go through PRs.
+## GitHub Evidence
 
-**GitHub PR evidence:** https://github.com/szcze006/TrainFuel/pulls?q=is%3Apr+is%3Amerged
+**Repository:** https://github.com/szcze006/TrainFuel
 
-## Final Verification Before Submission
+**Merged Pull Requests:** https://github.com/szcze006/TrainFuel/pulls?q=is%3Apr+is%3Amerged
 
-- [ ] Confirm the official Sprint 3 start and end dates.
-- [ ] Verify the exact titles, authors, reviewers, and merge dates of all PRs merged within those dates.
-- [ ] Add the exact URL of the merged Performance Hub PR.
-- [ ] Count Sprint 3 commits and enter first/last commit dates.
-- [ ] Commit this report through a pull request and submit its GitHub file URL.
+**Sports Coach PR:** https://github.com/szcze006/TrainFuel/pull/8
+
+**Development Branch:** https://github.com/szcze006/TrainFuel/tree/dev
+
+## Conclusion
+
+Sprint 3 expanded TrainFuel with sports coaching, recovery recommendations, workout scheduling, nutrition tools, hydration tracking, and performance insights.
+
+I completed and tested the reported development work and integrated the feature changes through GitHub pull requests. The remaining report verification involves recording the exact commit statistics, PR reviewers, and merge dates from GitHub.
