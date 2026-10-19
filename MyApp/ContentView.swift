@@ -922,6 +922,15 @@ struct MainTabView: View {
                         }
                     TrainingPlanView(profileStore: profileStore, workoutStore: workoutStore)
                         .tabItem { Label("Plan", systemImage: "calendar") }
+                  
+                    PerformanceHubView(
+                        profileStore: profileStore,
+                        workoutStore: workoutStore,
+                        mealStore: mealStore
+                    )
+                    .tabItem {
+                        Label("Performance", systemImage: "chart.bar.fill")
+                    }
 
                     FitnessView(workoutStore: workoutStore)
                         .tabItem {
