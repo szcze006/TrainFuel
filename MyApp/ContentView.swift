@@ -720,6 +720,8 @@ struct LoginView: View {
     @State private var password = ""
     @State private var errorMessage = ""
     @State private var isLoading = false
+    @State private var showResetAlert = false
+    @State private var resetMessage = ""
 
     var body: some View {
 
@@ -775,12 +777,24 @@ struct LoginView: View {
             .foregroundStyle(Color.white)
             .clipShape(RoundedRectangle(cornerRadius: 14))
             .disabled(isLoading || email.isEmpty || password.isEmpty)
+            
+            Button("Forgot Password?") {
+                sendPasswordReset()
+            }
+            .font(.subheadline)
+            .foregroundStyle(Color.trainBlue)
+            .disabled(isLoading || email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
             Spacer()
         }
         .padding(25)
         .navigationTitle("Log In")
         .navigationBarTitleDisplayMode(.inline)
+        .alert("Password Reset", isPresented: $showResetAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(resetMessage)
+        }
     }
 
     private func login() {
@@ -795,12 +809,51 @@ struct LoginView: View {
 
             isLoading = false
 
-            if let error = error {
-                errorMessage = error.localizedDescription
+            if let error = error as NSError? {
+                switch AuthErrorCode(rawValue: error.code) {
+                case .wrongPassword, .invalidCredential:
+                    errorMessage = "Email or password is incorrect."
+                case .invalidEmail:
+                    errorMessage = "Please enter a valid email address."
+                case .userDisabled:
+                    errorMessage = "This account has been disabled. Contact support."
+                case .networkError:
+                    errorMessage = "Network error. Check your internet connection."
+                case .tooManyRequests:
+                    errorMessage = "Too many attempts. Please try again later."
+                default:
+                    errorMessage = "Unable to log in. Please try again."
+                }
                 return
             }
 
             user = result?.user
+        }
+    }
+    
+    private func sendPasswordReset() {
+        let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        errorMessage = ""
+
+        guard !trimmedEmail.isEmpty else {
+            errorMessage = "Please enter your email address first."
+            return
+        }
+
+        isLoading = true
+
+        Auth.auth().sendPasswordReset(withEmail: trimmedEmail) { error in
+            isLoading = false
+
+            if let error = error {
+                errorMessage = "Unable to send reset email. Check the email address and try again."
+                print("Password reset error: \(error.localizedDescription)")
+                return
+            }
+
+            resetMessage = "If an account exists for this email, a password reset email has been sent."
+            showResetAlert = true
         }
     }
 }
@@ -887,7 +940,10 @@ struct SignUpView: View {
         }
         .navigationTitle("Sign Up")
         .navigationBarTitleDisplayMode(.inline)
+        
+        
     }
+    
 
     private func createAccount() {
 
@@ -915,9 +971,24 @@ struct SignUpView: View {
             password: password
         ) { result, error in
 
-            if let error = error {
+            if let error = error as NSError? {
                 isLoading = false
-                errorMessage = error.localizedDescription
+
+                switch AuthErrorCode(rawValue: error.code) {
+                case .emailAlreadyInUse:
+                    errorMessage = "An account with this email already exists."
+                case .invalidEmail:
+                    errorMessage = "Please enter a valid email address."
+                case .weakPassword:
+                    errorMessage = "Please choose a stronger password."
+                case .networkError:
+                    errorMessage = "Network error. Check your internet connection."
+                case .tooManyRequests:
+                    errorMessage = "Too many attempts. Please try again later."
+                default:
+                    errorMessage = "Unable to create your account. Please try again."
+                }
+
                 return
             }
 
