@@ -166,6 +166,21 @@ struct PerformanceHubView: View {
                 ForEach(logged) { workout in
                     Text("✓ \(workout.name) · \(workout.duration) min")
                 }
+                let meals = mealStore.meals(on: selectedDay)
+                Text("Logged meals: \(meals.count)").font(.headline)
+                if meals.isEmpty {
+                    Text("No meals logged").foregroundStyle(.secondary)
+                } else {
+                    Text("Total: \(mealStore.totalCalories(on: selectedDay)) kcal · \(mealStore.totalProtein(on: selectedDay)) g protein · \(mealStore.totalCarbs(on: selectedDay)) g carbs · \(mealStore.totalFat(on: selectedDay)) g fat")
+                        .font(.subheadline)
+                    ForEach(meals) { meal in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("\(meal.name) · \(meal.calories) kcal")
+                            Text("\(meal.protein) g protein · \(meal.carbs) g carbs · \(meal.fat) g fat")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
                 Text("Training notes (saved on this device)").font(.headline)
                 TextEditor(text: $calendarNotes).frame(height: 90)
                     .overlay(RoundedRectangle(cornerRadius: 10).stroke(.gray.opacity(0.3)))
