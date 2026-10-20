@@ -16,14 +16,35 @@ extension Color {
 
 // MARK: - MEAL MODEL
 
+
 struct FoodEntry: Identifiable, Codable {
-    var id = UUID()
+    let id: UUID
     let name: String
     let calories: Int
     let protein: Int
     let carbs: Int
     let fat: Int
+    let date: Date
+
+    init(
+        id: UUID = UUID(),
+        name: String,
+        calories: Int,
+        protein: Int,
+        carbs: Int,
+        fat: Int,
+        date: Date = Date()
+    ) {
+        self.id = id
+        self.name = name
+        self.calories = calories
+        self.protein = protein
+        self.carbs = carbs
+        self.fat = fat
+        self.date = date
+    }
 }
+
 
 
 // MARK: - MEAL STORE
@@ -54,6 +75,29 @@ final class MealStore: ObservableObject {
         foods.reduce(0) { $0 + $1.fat }
     }
     
+    func meals(on date: Date) -> [FoodEntry] {
+        foods.filter {
+            Calendar.current.isDate($0.date, inSameDayAs: date)
+        }
+    }
+    
+    func totalCalories(on date: Date) -> Int {
+        meals(on: date).reduce(0) { $0 + $1.calories }
+    }
+    
+    func totalProtein(on date: Date) -> Int {
+        meals(on: date).reduce(0) { $0 + $1.protein }
+    }
+    
+    func totalCarbs(on date: Date) -> Int {
+        meals(on: date).reduce(0) { $0 + $1.carbs }
+    }
+    
+    func totalFat(on date: Date) -> Int {
+        meals(on: date).reduce(0) { $0 + $1.fat }
+    }
+    
+    
     // MARK: - Add Meal
     
     func addMeal(_ meal: FoodEntry) {
@@ -74,7 +118,7 @@ final class MealStore: ObservableObject {
             "protein": meal.protein,
             "carbs": meal.carbs,
             "fat": meal.fat,
-            "date": Timestamp(date: Date())
+            "date": Timestamp(date: meal.date)
         ]
         
         // users → UID → meals → meal ID
@@ -123,6 +167,7 @@ final class MealStore: ObservableObject {
     
     // MARK: - Load Meals
     
+    
     private func loadMealsFromFirebase() {
         
         guard let uid = Auth.auth().currentUser?.uid else {
@@ -158,13 +203,24 @@ final class MealStore: ObservableObject {
                         return nil
                     }
                     
+                    // Read the saved date from Firebase.
+                    let mealDate: Date
+                    
+                    if let timestamp = data["date"] as? Timestamp {
+                        mealDate = timestamp.dateValue()
+                    } else {
+                        // Don't count older records with missing dates as today's meals.
+                        mealDate = .distantPast
+                    }
+    
                     return FoodEntry(
                         id: UUID(uuidString: document.documentID) ?? UUID(),
                         name: name,
                         calories: calories,
                         protein: protein,
                         carbs: carbs,
-                        fat: fat
+                        fat: fat,
+                        date: mealDate
                     )
                 }
                 
@@ -1149,6 +1205,25 @@ struct DashboardView: View {
     var proteinGoal: Int {
         profileStore.profile.proteinGoal
     }
+    var todayCalories: Int {
+        mealStore.totalCalories(on: Date())
+    }
+
+    var todayProtein: Int {
+        mealStore.totalProtein(on: Date())
+    }
+
+    var todayCarbs: Int {
+        mealStore.totalCarbs(on: Date())
+    }
+
+    var todayFat: Int {
+        mealStore.totalFat(on: Date())
+    }
+
+    var todayMeals: [FoodEntry] {
+        mealStore.meals(on: Date())
+    }
 
     var caloriePercentage: Int {
 
@@ -1157,7 +1232,7 @@ struct DashboardView: View {
         }
 
         return Int(
-            Double(mealStore.totalCalories)
+            Double(todayCalories)
             / Double(calorieGoal)
             * 100
         )
@@ -1198,7 +1273,7 @@ struct DashboardView: View {
 
                             VStack(alignment: .leading, spacing: 4) {
 
-                                Text("\(mealStore.totalCalories)")
+                                Text("\(todayCalories)")
                                     .font(
                                         .system(
                                             size: 34,
@@ -1211,7 +1286,7 @@ struct DashboardView: View {
                                     .foregroundStyle(Color.secondary)
 
                                 Text(
-                                    "\(max(calorieGoal - mealStore.totalCalories, 0)) remaining"
+                                    "\(max(calorieGoal - todayCalories, 0)) remaining"
                                 )
                                 .font(.caption)
                                 .foregroundStyle(Color.secondary)
@@ -1231,7 +1306,7 @@ struct DashboardView: View {
                                     .trim(
                                         from: 0,
                                         to: min(
-                                            Double(mealStore.totalCalories)
+                                            Double(todayCalories)
                                             / Double(calorieGoal),
                                             1
                                         )
@@ -1266,19 +1341,19 @@ struct DashboardView: View {
 
                         MacroCard(
                             title: "Protein",
-                            amount: "\(mealStore.totalProtein)g",
+                            amount: "\(todayProtein)g",
                             goal: "\(proteinGoal)g"
                         )
 
                         MacroCard(
                             title: "Carbs",
-                            amount: "\(mealStore.totalCarbs)g",
+                            amount: "\(todayCarbs)g",
                             goal: "Tracked"
                         )
 
                         MacroCard(
                             title: "Fat",
-                            amount: "\(mealStore.totalFat)g",
+                            amount: "\(todayFat)g",
                             goal: "Tracked"
                         )
                     }
@@ -1325,7 +1400,7 @@ struct DashboardView: View {
                         .font(.headline)
                         .foregroundStyle(Color.trainBlue)
 
-                        if mealStore.foods.isEmpty {
+                        if todayMeals.isEmpty {
 
                             Text("No meals logged yet")
                                 .font(.title3.bold())
@@ -1338,12 +1413,12 @@ struct DashboardView: View {
                         } else {
 
                             Text(
-                                "\(mealStore.foods.count) meal\(mealStore.foods.count == 1 ? "" : "s") logged"
+                                "\(todayMeals.count) meal\(todayMeals.count == 1 ? "" : "s") logged"
                             )
                             .font(.title3.bold())
 
                             Text(
-                                "\(mealStore.totalCalories) calories and \(mealStore.totalProtein)g protein logged today."
+                                "\(todayCalories) calories and \(todayProtein)g protein logged today."
                             )
                             .foregroundStyle(Color.secondary)
                         }
@@ -1405,6 +1480,9 @@ struct NutritionView: View {
     @ObservedObject var mealStore: MealStore
 
     @State private var showAddMeal = false
+    private var todayMeals: [FoodEntry] {
+        mealStore.meals(on: Date())
+    }
 
     var body: some View {
 
@@ -1416,12 +1494,12 @@ struct NutritionView: View {
 
                     StatBox(
                         title: "Calories",
-                        value: "\(mealStore.totalCalories)"
+                        value: "\(mealStore.totalCalories(on: Date()))"
                     )
 
                     StatBox(
                         title: "Protein",
-                        value: "\(mealStore.totalProtein)g"
+                        value: "\(mealStore.totalProtein(on: Date()))g"
                     )
                 }
                 .padding(.horizontal)
@@ -1430,17 +1508,17 @@ struct NutritionView: View {
 
                     StatBox(
                         title: "Carbs",
-                        value: "\(mealStore.totalCarbs)g"
+                        value: "\(mealStore.totalCarbs(on: Date()))g"
                     )
 
                     StatBox(
                         title: "Fat",
-                        value: "\(mealStore.totalFat)g"
+                        value: "\(mealStore.totalFat(on: Date()))g"
                     )
                 }
                 .padding(.horizontal)
 
-                if mealStore.foods.isEmpty {
+               if todayMeals.isEmpty {
 
                     Spacer()
 
@@ -1466,7 +1544,7 @@ struct NutritionView: View {
 
                         Section("Today's Meals") {
 
-                            ForEach(mealStore.foods) { food in
+                            ForEach(todayMeals) { food in
 
                                 VStack(alignment: .leading, spacing: 8) {
 
@@ -1494,7 +1572,17 @@ struct NutritionView: View {
                                 .padding(.vertical, 4)
                             }
                             .onDelete { offsets in
-                                mealStore.deleteMeals(at: offsets)
+                                let selectedMeals = offsets.map { todayMeals[$0] }
+
+                                let allIndices = IndexSet(
+                                    selectedMeals.compactMap { selectedMeal in
+                                        mealStore.foods.firstIndex {
+                                            $0.id == selectedMeal.id
+                                        }
+                                    }
+                                )
+
+                                mealStore.deleteMeals(at: allIndices)
                             }
                         }
                     }
@@ -1678,7 +1766,7 @@ struct ProgressScreen: View {
 
         return Int(
             min(
-                Double(mealStore.totalCalories)
+                Double(mealStore.totalCalories(on: Date()))
                 / Double(profileStore.profile.calorieGoal),
                 1
             ) * 100
@@ -1693,7 +1781,7 @@ struct ProgressScreen: View {
 
         return Int(
             min(
-                Double(mealStore.totalProtein)
+                Double(mealStore.totalProtein(on: Date()))
                 / Double(profileStore.profile.proteinGoal),
                 1
             ) * 100
@@ -1727,7 +1815,7 @@ struct ProgressScreen: View {
 
                         ProgressCard(
                             title: "Meals",
-                            value: "\(mealStore.foods.count)"
+                            value: "\(mealStore.meals(on: Date()).count)"
                         )
 
                         ProgressCard(
@@ -1778,7 +1866,7 @@ struct ProgressScreen: View {
                         SummaryRow(
                             title: "Calories",
                             value:
-                                "\(mealStore.totalCalories) / \(profileStore.profile.calorieGoal)"
+                                "\(mealStore.totalCalories(on: Date())) / \(profileStore.profile.calorieGoal)"
                         )
 
                         Divider()
@@ -1786,21 +1874,21 @@ struct ProgressScreen: View {
                         SummaryRow(
                             title: "Protein",
                             value:
-                                "\(mealStore.totalProtein)g / \(profileStore.profile.proteinGoal)g"
+                                "\(mealStore.totalProtein(on: Date()))g / \(profileStore.profile.proteinGoal)g"
                         )
 
                         Divider()
 
                         SummaryRow(
                             title: "Carbs",
-                            value: "\(mealStore.totalCarbs)g"
+                            value: "\(mealStore.totalCarbs(on: Date()))g"
                         )
 
                         Divider()
 
                         SummaryRow(
                             title: "Fat",
-                            value: "\(mealStore.totalFat)g"
+                            value: "\(mealStore.totalFat(on: Date()))g"
                         )
                     }
                     .padding(20)
