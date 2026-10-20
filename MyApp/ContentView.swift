@@ -606,21 +606,41 @@ final class ProfileStore: ObservableObject {
 
 // MARK: - ROOT
 
+
 struct ContentView: View {
 
     @State private var user = Auth.auth().currentUser
+    @State private var verificationCompleted = false
 
     var body: some View {
         Group {
-            if user != nil {
-                MainTabView(user: $user)
+            if let currentUser = user {
+                if currentUser.isEmailVerified ||
+                    verificationCompleted ||
+                    currentUser.providerData.contains(where: {
+                        $0.providerID == "apple.com"
+                    }) {
+                    MainTabView(user: $user)
+                } else {
+                    EmailVerificationView(
+                        user: $user,
+                        onVerified: {
+                            verificationCompleted = true
+                            user = Auth.auth().currentUser
+                        }
+                    )
+                }
             } else {
                 WelcomeView(user: $user)
             }
         }
         .preferredColorScheme(.light)
+        .onAppear {
+            user = Auth.auth().currentUser
+        }
     }
 }
+
 
 
 // MARK: - WELCOME
@@ -871,6 +891,7 @@ struct SignUpView: View {
     @State private var errorMessage = ""
     @State private var isLoading = false
 
+
     var body: some View {
 
         ScrollView {
@@ -1003,19 +1024,171 @@ struct SignUpView: View {
 
             request.commitChanges { error in
 
-                isLoading = false
-
-                if let error = error {
-                    errorMessage = error.localizedDescription
+                if error != nil {
+                    DispatchQueue.main.async {
+                        isLoading = false
+                        errorMessage = "Your account was created, but your profile could not be saved. Please try signing in again."
+                    }
                     return
                 }
 
-                user = Auth.auth().currentUser
+                firebaseUser.sendEmailVerification { error in
+                    DispatchQueue.main.async {
+                        isLoading = false
+
+                        if error != nil {
+                            errorMessage = "Your account was created, but we couldn't send the verification email. Please try signing in to resend it."
+                            return
+                        }
+
+                        user = Auth.auth().currentUser
+                    }
+                }
             }
         }
     }
 }
 
+// MARK: - EMAIL VERIFICATION VIEW
+struct EmailVerificationView: View {
+
+    @Binding var user: User?
+    var onVerified: () -> Void
+    @Environment(\.scenePhase) private var scenePhase
+
+    @State private var message = ""
+    @State private var isLoading = false
+
+    var body: some View {
+        VStack(spacing: 22) {
+
+            Image(systemName: "envelope.badge.shield.half.filled")
+                .font(.system(size: 68))
+                .foregroundStyle(Color.trainBlue)
+
+            Text("Verify Your Email")
+                .font(.largeTitle.bold())
+
+            Text("We've sent a verification link to:")
+                .foregroundStyle(.secondary)
+
+            Text(user?.email ?? "your email address")
+                .fontWeight(.semibold)
+                .multilineTextAlignment(.center)
+
+            Text("Verify your email using the link we sent. Then return here to continue to TrainFUEL.")
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.secondary)
+
+            if !message.isEmpty {
+                Text(message)
+                    .font(.caption)
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(Color.trainBlue)
+            }
+
+            Button {
+                checkVerification()
+            } label: {
+                if isLoading {
+                    ProgressView()
+                        .frame(maxWidth: .infinity)
+                } else {
+                    Text("I've Verified My Email")
+                        .fontWeight(.bold)
+                        .frame(maxWidth: .infinity)
+                }
+            }
+            .padding()
+            .background(Color.trainBlue)
+            .foregroundStyle(.white)
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .disabled(isLoading)
+
+            Button("Resend Verification Email") {
+                resendVerification()
+            }
+            .foregroundStyle(Color.trainBlue)
+            .disabled(isLoading)
+
+            Button("Sign Out", role: .destructive) {
+                do {
+                    try Auth.auth().signOut()
+                    user = nil
+                } catch {
+                    message = "Unable to sign out. Please try again."
+                }
+            }
+        }
+        .padding(28)
+        .onAppear {
+            checkVerification()
+        }
+        .onChange(of: scenePhase) {
+            if scenePhase == .active {
+                checkVerification()
+            }
+        }
+    }
+
+    private func checkVerification() {
+        guard let currentUser = Auth.auth().currentUser else {
+            user = nil
+            return
+        }
+
+        isLoading = true
+
+        currentUser.reload { error in
+            DispatchQueue.main.async {
+                isLoading = false
+
+                if error != nil {
+                    message = "Couldn't check verification status. Check your connection and try again."
+                    return
+                }
+
+                guard let refreshedUser = Auth.auth().currentUser else {
+                    user = nil
+                    return
+                }
+
+                
+                user = refreshedUser
+                print("Email verified:", refreshedUser.isEmailVerified)
+
+                if refreshedUser.isEmailVerified {
+                    message = "Email verified! Opening TrainFUEL..."
+                    onVerified()
+                } else {
+                    message = "Your email isn't verified yet. Open the verification link in your inbox, then try again."
+                }
+
+            }
+        }
+    }
+
+    private func resendVerification() {
+        guard let currentUser = Auth.auth().currentUser else {
+            user = nil
+            return
+        }
+
+        isLoading = true
+
+        currentUser.sendEmailVerification { error in
+            DispatchQueue.main.async {
+                isLoading = false
+
+                if error != nil {
+                    message = "Couldn't send the email. Check your connection and try again."
+                } else {
+                    message = "Verification email sent. Check your inbox and spam folder."
+                }
+            }
+        }
+    }
+}
 
 // MARK: - MAIN APP
 
