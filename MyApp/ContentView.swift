@@ -399,6 +399,8 @@ struct FitnessProfile: Codable {
     var trainingDays: Int = 4
     var calorieGoal: Int = 2500
     var proteinGoal: Int = 180
+    var carbsGoal: Int = 300
+    var fatGoal: Int = 80
 
     // Personal details for TFUEL-54
     // Zero means the user has not entered this measurement.
@@ -420,6 +422,141 @@ struct FitnessProfile: Codable {
     }
 }
 
+struct NutritionTargets {
+    let calories: Int
+    let protein: Int
+    let carbs: Int
+    let fat: Int
+}
+
+enum NutritionCalculator {
+
+    static func calculate(
+        profile: FitnessProfile
+    ) -> NutritionTargets? {
+
+        guard profile.hasValidPersonalDetails else {
+            return nil
+        }
+
+        let weight = profile.weightKg
+        let height = profile.heightCm
+        let age = Double(profile.age)
+
+        // Mifflin–St Jeor equation.
+        let sexAdjustment: Double
+
+        switch profile.metabolicEquationSex {
+        case "Male":
+            sexAdjustment = 5
+        case "Female":
+            sexAdjustment = -161
+        default:
+            // Neutral midpoint when the user prefers not to say.
+            sexAdjustment = -78
+        }
+
+        let bmr =
+            (10 * weight) +
+            (6.25 * height) -
+            (5 * age) +
+            sexAdjustment
+
+        let activityMultiplier: Double
+
+        switch profile.activityLevel {
+        case "Sedentary":
+            activityMultiplier = 1.2
+        case "Lightly Active":
+            activityMultiplier = 1.375
+        case "Moderately Active":
+            activityMultiplier = 1.55
+        case "Very Active":
+            activityMultiplier = 1.725
+        case "Extra Active":
+            activityMultiplier = 1.9
+        default:
+            activityMultiplier = 1.55
+        }
+
+        let maintenanceCalories = bmr * activityMultiplier
+
+        let calorieAdjustment: Double
+
+        switch profile.goal {
+        case "Build Muscle":
+            calorieAdjustment = 1.10
+        case "Lose Fat":
+            calorieAdjustment = 0.85
+        case "Maintain Weight":
+            calorieAdjustment = 1.0
+        case "Improve Performance":
+            calorieAdjustment = 1.05
+        default:
+            calorieAdjustment = 1.0
+        }
+
+        let calories = max(
+            1200,
+            Int((maintenanceCalories * calorieAdjustment).rounded())
+        )
+
+        // Protein targets in grams per kilogram of body weight.
+        let proteinMultiplier: Double
+
+        switch profile.goal {
+        case "Build Muscle":
+            proteinMultiplier = 2.0
+        case "Lose Fat":
+            proteinMultiplier = 2.0
+        case "Maintain Weight":
+            proteinMultiplier = 1.6
+        case "Improve Performance":
+            proteinMultiplier = 1.8
+        default:
+            proteinMultiplier = 1.6
+        }
+
+        let protein = Int(
+            (weight * proteinMultiplier).rounded()
+        )
+
+        let macros = carbsAndFat(
+            calories: calories,
+            protein: protein
+        )
+
+        return NutritionTargets(
+            calories: calories,
+            protein: protein,
+            carbs: macros.carbs,
+            fat: macros.fat
+        )
+    }
+
+    // Split remaining calories 2:1 between carbs and fat.
+    static func carbsAndFat(
+        calories: Int,
+        protein: Int
+    ) -> (carbs: Int, fat: Int) {
+
+        let remainingCalories = max(
+            0,
+            calories - (protein * 4)
+        )
+
+        let carbs = Int(
+            (Double(remainingCalories) * (2.0 / 3.0) / 4).rounded()
+        )
+
+        let fat = Int(
+            (Double(remainingCalories) * (1.0 / 3.0) / 9).rounded()
+        )
+
+        return (carbs, fat)
+    }
+}
+
 // MARK: - PROFILE STORE
 
 final class ProfileStore: ObservableObject {
@@ -428,6 +565,21 @@ final class ProfileStore: ObservableObject {
         didSet {
             saveProfileToFirebase()
         }
+    }
+    func updateNutritionTargets() {
+        guard let targets = NutritionCalculator.calculate(
+            profile: profile
+        ) else {
+            return
+        }
+
+        var updatedProfile = profile
+        updatedProfile.calorieGoal = targets.calories
+        updatedProfile.proteinGoal = targets.protein
+        updatedProfile.carbsGoal = targets.carbs
+        updatedProfile.fatGoal = targets.fat
+
+        profile = updatedProfile
     }
 
     private let db = Firestore.firestore()
@@ -468,6 +620,8 @@ final class ProfileStore: ObservableObject {
             "trainingDays": profile.trainingDays,
             "calorieGoal": profile.calorieGoal,
             "proteinGoal": profile.proteinGoal,
+            "carbsGoal": profile.carbsGoal,
+            "fatGoal": profile.fatGoal,
             
             "age": profile.age,
             "heightCm": profile.heightCm,
@@ -523,6 +677,8 @@ final class ProfileStore: ObservableObject {
                 trainingDays: data["trainingDays"] as? Int ?? 4,
                 calorieGoal: data["calorieGoal"] as? Int ?? 2500,
                 proteinGoal: data["proteinGoal"] as? Int ?? 180,
+                carbsGoal: data["carbsGoal"] as? Int ?? 300,
+                fatGoal: data["fatGoal"] as? Int ?? 80,
                 
                 age: data["age"] as? Int ?? 0,
                 heightCm: data["heightCm"] as? Double ?? 0,
@@ -1248,7 +1404,10 @@ struct MainTabView: View {
                         Label("Home", systemImage: "house.fill")
                     }
 
-                    NutritionView(mealStore: mealStore)
+                    NutritionView(
+                        mealStore: mealStore,
+                        profileStore: profileStore
+                    )
                         .tabItem {
                             Label("Nutrition", systemImage: "fork.knife")
                         }
@@ -1315,7 +1474,7 @@ struct SetupProfileView: View {
     @State private var goal = "Build Muscle"
     @State private var trainingDays = 4
 
-    // Temporary defaults until TFUEL-55 calculates targets.
+    // Fallback targets; replaced by NutritionCalculator in saveProfile().
     @State private var calorieGoal = 2500
     @State private var proteinGoal = 180
 
@@ -1670,12 +1829,14 @@ struct SetupProfileView: View {
             return
         }
 
-        profileStore.profile = FitnessProfile(
+        var newProfile = FitnessProfile(
             sport: sport,
             goal: goal,
             trainingDays: trainingDays,
             calorieGoal: calorieGoal,
             proteinGoal: proteinGoal,
+            carbsGoal: 300,
+            fatGoal: 80,
             age: age,
             heightCm: heightCm,
             weightKg: weightKg,
@@ -1683,6 +1844,17 @@ struct SetupProfileView: View {
             metabolicEquationSex: metabolicEquationSex,
             measurementUnits: measurementUnits
         )
+
+        if let targets = NutritionCalculator.calculate(
+            profile: newProfile
+        ) {
+            newProfile.calorieGoal = targets.calories
+            newProfile.proteinGoal = targets.protein
+            newProfile.carbsGoal = targets.carbs
+            newProfile.fatGoal = targets.fat
+        }
+
+        profileStore.profile = newProfile
     }
 }
 
@@ -1969,12 +2141,69 @@ struct MacroCard: View {
     }
 }
 
+struct NutritionProgressRow: View {
+
+    let title: String
+    let consumed: Int
+    let target: Int
+    let unit: String
+
+    private var progress: Double {
+        guard target > 0 else { return 0 }
+        return min(Double(consumed) / Double(target), 1.0)
+    }
+
+    private var remaining: Int {
+        max(target - consumed, 0)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+
+            HStack {
+                Text(title)
+                    .font(.headline)
+
+                Spacer()
+
+                Text("\(consumed) / \(target) \(unit)")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+
+            ProgressView(value: progress)
+                .tint(Color.trainBlue)
+
+            HStack {
+                if consumed >= target {
+                    Text("Target reached")
+                        .foregroundStyle(.green)
+                } else {
+                    Text("\(remaining) \(unit) remaining")
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Text("\(Int(progress * 100))%")
+                    .foregroundStyle(.secondary)
+            }
+            .font(.caption)
+        }
+        .padding()
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .shadow(color: Color.black.opacity(0.05), radius: 5)
+    }
+}
+
 
 // MARK: - NUTRITION
 
 struct NutritionView: View {
 
     @ObservedObject var mealStore: MealStore
+    @ObservedObject var profileStore: ProfileStore
 
     @State private var showAddMeal = false
     private var todayMeals: [FoodEntry] {
@@ -1987,53 +2216,74 @@ struct NutritionView: View {
 
             VStack(spacing: 12) {
 
-                HStack(spacing: 10) {
+                
+                VStack(spacing: 12) {
 
-                    StatBox(
+                    NutritionProgressRow(
                         title: "Calories",
-                        value: "\(mealStore.totalCalories(on: Date()))"
+                        consumed: mealStore.totalCalories(on: Date()),
+                        target: profileStore.profile.calorieGoal,
+                        unit: "kcal"
                     )
 
-                    StatBox(
+                    NutritionProgressRow(
                         title: "Protein",
-                        value: "\(mealStore.totalProtein(on: Date()))g"
-                    )
-                }
-                .padding(.horizontal)
-
-                HStack(spacing: 10) {
-
-                    StatBox(
-                        title: "Carbs",
-                        value: "\(mealStore.totalCarbs(on: Date()))g"
+                        consumed: mealStore.totalProtein(on: Date()),
+                        target: profileStore.profile.proteinGoal,
+                        unit: "g"
                     )
 
-                    StatBox(
+                    NutritionProgressRow(
+                        title: "Carbohydrates",
+                        consumed: mealStore.totalCarbs(on: Date()),
+                        target: profileStore.profile.carbsGoal,
+                        unit: "g"
+                    )
+
+                    NutritionProgressRow(
                         title: "Fat",
-                        value: "\(mealStore.totalFat(on: Date()))g"
+                        consumed: mealStore.totalFat(on: Date()),
+                        target: profileStore.profile.fatGoal,
+                        unit: "g"
                     )
+
+                    Text(
+                        profileStore.profile.hasValidPersonalDetails
+                        ? "Targets are estimates based on your profile, not medical advice."
+                        : "Default targets shown. Add your age, height and weight in Edit Training Plan for personalized estimates."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .padding(.horizontal)
+
 
                if todayMeals.isEmpty {
 
-                    Spacer()
+                    // Scrolls like the meal list so the screen never overflows.
+                    ScrollView {
 
-                    Image(systemName: "fork.knife.circle")
-                        .font(.system(size: 70))
-                        .foregroundStyle(Color.trainBlue)
+                        VStack(spacing: 12) {
 
-                    Text("No Meals Yet")
-                        .font(.title2.bold())
+                            Image(systemName: "fork.knife.circle")
+                                .font(.system(size: 70))
+                                .foregroundStyle(Color.trainBlue)
 
-                    Text(
-                        "Add your first meal to start tracking today's nutrition."
-                    )
-                    .multilineTextAlignment(.center)
-                    .foregroundStyle(Color.secondary)
-                    .padding(.horizontal, 35)
+                            Text("No Meals Yet")
+                                .font(.title2.bold())
 
-                    Spacer()
+                            Text(
+                                "Add your first meal to start tracking today's nutrition."
+                            )
+                            .multilineTextAlignment(.center)
+                            .foregroundStyle(Color.secondary)
+                            .padding(.horizontal, 35)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 24)
+                    }
 
                 } else {
 
@@ -2655,7 +2905,8 @@ struct EditProfileView: View {
             initialValue: profileStore.profile.proteinGoal
         )
         
-        _age = State(initialValue: profileStore.profile.age)
+        // Profiles without an age store 0; start the stepper at its minimum.
+        _age = State(initialValue: max(18, profileStore.profile.age))
         _heightCm = State(initialValue: profileStore.profile.heightCm)
         _weightKg = State(initialValue: profileStore.profile.weightKg)
         _activityLevel = State(
@@ -2777,6 +3028,7 @@ struct EditProfileView: View {
                     ) {
                         Text("Male").tag("Male")
                         Text("Female").tag("Female")
+                        Text("Prefer not to say").tag("Prefer not to say")
                     }
 
                     Text(
@@ -2820,14 +3072,14 @@ struct EditProfileView: View {
                     Stepper(
                         "\(calorieGoal) calories",
                         value: $calorieGoal,
-                        in: 1200...5000,
+                        in: 1200...8000,
                         step: 100
                     )
 
                     Stepper(
                         "\(proteinGoal)g protein",
                         value: $proteinGoal,
-                        in: 50...300,
+                        in: 50...500,
                         step: 5
                     )
                 }
@@ -2855,30 +3107,47 @@ struct EditProfileView: View {
     }
 
     private func save() {
-    
+
+        // Imperial inputs are only converted when switching units,
+        // so convert them here before validating and saving.
+        if measurementUnits == "Imperial" {
+            let totalInches = heightFeet * 12 + heightInches
+
+            // Keep the original cm value if the height wasn't changed,
+            // avoiding rounding loss from whole inches.
+            if totalInches != Int(heightCm / 2.54) {
+                heightCm = Double(totalInches) * 2.54
+            }
+
+            weightKg = weightPounds / 2.20462
+        }
+
         guard (18...100).contains(age) else {
             validationError = "Age must be between 18 and 100."
             return
         }
 
-        guard (90...250).contains(heightCm) else {
+        guard heightCm.isFinite,
+              (100...250).contains(heightCm) else {
             validationError = "Height must be between 100 and 250 cm."
             return
         }
 
-        guard (20...350).contains(weightKg) else {
+        guard weightKg.isFinite, (30...350).contains(weightKg) else {
             validationError = "Weight must be between 30 and 350 kg."
             return
         }
 
         validationError = nil
 
-        profileStore.profile = FitnessProfile(
+        var updatedProfile = FitnessProfile(
             sport: sport,
             goal: goal,
             trainingDays: trainingDays,
             calorieGoal: calorieGoal,
             proteinGoal: proteinGoal,
+            carbsGoal: profileStore.profile.carbsGoal,
+            fatGoal: profileStore.profile.fatGoal,
             age: age,
             heightCm: heightCm,
             weightKg: weightKg,
@@ -2886,6 +3155,38 @@ struct EditProfileView: View {
             metabolicEquationSex: metabolicEquationSex,
             measurementUnits: measurementUnits
         )
+
+        // Recalculate targets only when a calculation input changed,
+        // so manual calorie/protein adjustments are otherwise kept.
+        let current = profileStore.profile
+        let inputsChanged =
+            age != current.age ||
+            abs(heightCm - current.heightCm) > 0.05 ||
+            abs(weightKg - current.weightKg) > 0.05 ||
+            activityLevel != current.activityLevel ||
+            metabolicEquationSex != current.metabolicEquationSex ||
+            goal != current.goal
+
+        if inputsChanged,
+           let targets = NutritionCalculator.calculate(
+               profile: updatedProfile
+           ) {
+            updatedProfile.calorieGoal = targets.calories
+            updatedProfile.proteinGoal = targets.protein
+            updatedProfile.carbsGoal = targets.carbs
+            updatedProfile.fatGoal = targets.fat
+        } else if calorieGoal != current.calorieGoal ||
+                    proteinGoal != current.proteinGoal {
+            // Manual calorie/protein change: keep carbs and fat consistent.
+            let macros = NutritionCalculator.carbsAndFat(
+                calories: calorieGoal,
+                protein: proteinGoal
+            )
+            updatedProfile.carbsGoal = macros.carbs
+            updatedProfile.fatGoal = macros.fat
+        }
+
+        profileStore.profile = updatedProfile
 
         dismiss()
     }
