@@ -392,6 +392,7 @@ final class WorkoutStore: ObservableObject {
 }
 // MARK: - FITNESS PROFILE
 
+
 struct FitnessProfile: Codable {
     var sport: String = ""
     var goal: String = ""
@@ -399,11 +400,25 @@ struct FitnessProfile: Codable {
     var calorieGoal: Int = 2500
     var proteinGoal: Int = 180
 
+    // Personal details for TFUEL-54
+    // Zero means the user has not entered this measurement.
+    var age: Int = 0
+    var heightCm: Double = 0
+    var weightKg: Double = 0
+    var activityLevel: String = "Moderately Active"
+    var metabolicEquationSex: String = "Prefer not to say"
+    var measurementUnits: String = "Metric"
+
     var isComplete: Bool {
         !sport.isEmpty && !goal.isEmpty
     }
-}
 
+    var hasValidPersonalDetails: Bool {
+        (18...100).contains(age) &&
+        (100...250).contains(heightCm) &&
+        (30...350).contains(weightKg)
+    }
+}
 
 // MARK: - PROFILE STORE
 
@@ -452,7 +467,15 @@ final class ProfileStore: ObservableObject {
             "goal": profile.goal,
             "trainingDays": profile.trainingDays,
             "calorieGoal": profile.calorieGoal,
-            "proteinGoal": profile.proteinGoal
+            "proteinGoal": profile.proteinGoal,
+            
+            "age": profile.age,
+            "heightCm": profile.heightCm,
+            "weightKg": profile.weightKg,
+            "activityLevel": profile.activityLevel,
+            "metabolicEquationSex": profile.metabolicEquationSex,
+            "measurementUnits": profile.measurementUnits
+
         ]
 
         profileReference.setData(profileData) { error in
@@ -499,7 +522,16 @@ final class ProfileStore: ObservableObject {
                 goal: data["goal"] as? String ?? "",
                 trainingDays: data["trainingDays"] as? Int ?? 4,
                 calorieGoal: data["calorieGoal"] as? Int ?? 2500,
-                proteinGoal: data["proteinGoal"] as? Int ?? 180
+                proteinGoal: data["proteinGoal"] as? Int ?? 180,
+                
+                age: data["age"] as? Int ?? 0,
+                heightCm: data["heightCm"] as? Double ?? 0,
+                weightKg: data["weightKg"] as? Double ?? 0,
+                activityLevel: data["activityLevel"] as? String ?? "Moderately Active",
+                metabolicEquationSex: data["metabolicEquationSex"] as? String ?? "Prefer not to say",
+                
+                measurementUnits: data["measurementUnits"] as? String ?? "Metric"
+
             )
 
             DispatchQueue.main.async {
@@ -1271,168 +1303,389 @@ struct MainTabView: View {
 
 // MARK: - PROFILE SETUP
 
+
 struct SetupProfileView: View {
 
     @ObservedObject var profileStore: ProfileStore
 
+    @State private var currentPage = 0
+    @State private var validationError: String?
+
     @State private var sport = "Weight Training"
     @State private var goal = "Build Muscle"
     @State private var trainingDays = 4
+
+    // Temporary defaults until TFUEL-55 calculates targets.
     @State private var calorieGoal = 2500
     @State private var proteinGoal = 180
 
-    let sports = [
-        "Weight Training",
-        "Soccer",
-        "Basketball",
-        "Football",
-        "Running",
-        "Volleyball",
-        "Other"
+    @State private var age = 0
+    @State private var heightCm = 0.0
+    @State private var weightKg = 0.0
+    @State private var activityLevel = "Moderately Active"
+    @State private var metabolicEquationSex = "Prefer not to say"
+    @State private var measurementUnits = "Metric"
+
+    private let sports = [
+        "Weight Training", "Soccer", "Basketball",
+        "Football", "Running", "Volleyball", "Other"
     ]
 
-    let goals = [
-        "Build Muscle",
-        "Lose Fat",
-        "Maintain Weight",
-        "Improve Performance"
+    private let goals = [
+        "Build Muscle", "Lose Fat",
+        "Maintain Weight", "Improve Performance"
     ]
 
     var body: some View {
-
         NavigationStack {
+            VStack(spacing: 16) {
 
-            ScrollView {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(currentPage == 0 ? "Personal Details" : "Training Profile")
+                        .font(.largeTitle.bold())
 
-                VStack(alignment: .leading, spacing: 24) {
+                    Text(currentPage == 0
+                         ? "Tell us about yourself."
+                         : "Tell us about your training goals.")
 
-                    VStack(alignment: .leading, spacing: 8) {
+                    Text("Step \(currentPage + 1) of 2")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color.trainBlue)
 
-                        Image(systemName: "figure.run.circle.fill")
-                            .font(.system(size: 60))
-                            .foregroundStyle(Color.trainBlue)
+                    ProgressView(value: Double(currentPage + 1), total: 2)
+                        .tint(Color.trainBlue)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-                        Text("Build Your Plan")
-                            .font(.largeTitle.bold())
-
-                        Text(
-                            "Tell TrainFUEL about your training so we can personalize your nutrition plan."
-                        )
-                        .foregroundStyle(Color.secondary)
+                Group {
+                    if currentPage == 0 {
+                        personalDetailsPage
+                    } else {
+                        trainingProfilePage
                     }
+                }
+                .frame(maxHeight: .infinity)
 
-                    VStack(alignment: .leading, spacing: 10) {
+                if let validationError {
+                    Text(validationError)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
 
-                        Text("Primary Sport")
-                            .font(.headline)
-
-                        Picker("Primary Sport", selection: $sport) {
-                            ForEach(sports, id: \.self) {
-                                Text($0)
-                            }
+                HStack(spacing: 12) {
+                    if currentPage == 1 {
+                        Button("Back") {
+                            validationError = nil
+                            currentPage = 0
                         }
-                        .pickerStyle(.menu)
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(Color.trainLightBlue)
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
-                    }
-
-                    VStack(alignment: .leading, spacing: 10) {
-
-                        Text("Main Goal")
-                            .font(.headline)
-
-                        Picker("Goal", selection: $goal) {
-                            ForEach(goals, id: \.self) {
-                                Text($0)
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(Color.trainLightBlue)
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
-                    }
-
-                    VStack(alignment: .leading, spacing: 10) {
-
-                        Text("Training Schedule")
-                            .font(.headline)
-
-                        Stepper(
-                            "\(trainingDays) days per week",
-                            value: $trainingDays,
-                            in: 1...7
-                        )
-                        .padding()
-                        .background(Color.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
-                    }
-
-                    VStack(alignment: .leading, spacing: 10) {
-
-                        Text("Daily Calorie Goal")
-                            .font(.headline)
-
-                        Stepper(
-                            "\(calorieGoal) calories",
-                            value: $calorieGoal,
-                            in: 1200...5000,
-                            step: 100
-                        )
-                        .padding()
-                        .background(Color.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
-                    }
-
-                    VStack(alignment: .leading, spacing: 10) {
-
-                        Text("Daily Protein Goal")
-                            .font(.headline)
-
-                        Stepper(
-                            "\(proteinGoal)g protein",
-                            value: $proteinGoal,
-                            in: 50...300,
-                            step: 5
-                        )
-                        .padding()
-                        .background(Color.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                        .buttonStyle(.bordered)
                     }
 
                     Button {
-                        saveProfile()
+                        if currentPage == 0 {
+                            if validatePersonalDetails() {
+                                validationError = nil
+                                currentPage = 1
+                            }
+                        } else {
+                            saveProfile()
+                        }
                     } label: {
-
-                        Text("Create My Plan")
+                        Text(currentPage == 0 ? "Continue" : "Create My Plan")
                             .fontWeight(.bold)
                             .frame(maxWidth: .infinity)
                             .padding()
                             .background(Color.trainBlue)
-                            .foregroundStyle(Color.white)
+                            .foregroundStyle(.white)
                             .clipShape(RoundedRectangle(cornerRadius: 15))
                     }
                 }
-                .padding()
             }
+            .padding()
             .background(Color.trainBackground)
             .navigationTitle("Setup")
+            .navigationBarTitleDisplayMode(.inline)
         }
     }
 
+    // MARK: - Page 1: Personal Details
+
+    private var personalDetailsPage: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+
+                Text("Your Measurements")
+                    .font(.headline)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Age")
+                        .font(.subheadline.weight(.semibold))
+
+                    TextField("Age in years", value: $age, format: .number)
+                        .keyboardType(.numberPad)
+                        .padding()
+                        .background(.white)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                }
+
+                Picker("Units", selection: $measurementUnits) {
+                    Text("Metric (cm, kg)").tag("Metric")
+                    Text("Imperial (ft, lb)").tag("Imperial")
+                }
+                .pickerStyle(.menu)
+                .padding()
+                .background(.white)
+                .clipShape(RoundedRectangle(cornerRadius: 14))
+
+                if measurementUnits == "Metric" {
+                    measurementField(
+                        title: "Height (cm)",
+                        placeholder: "Height in centimeters",
+                        value: $heightCm
+                    )
+
+                    measurementField(
+                        title: "Weight (kg)",
+                        placeholder: "Weight in kilograms",
+                        value: $weightKg
+                    )
+                } else {
+                    imperialHeightFields
+
+                    measurementField(
+                        title: "Weight (lb)",
+                        placeholder: "Weight in pounds",
+                        value: Binding(
+                            get: { weightKg * 2.20462 },
+                            set: { weightKg = $0 / 2.20462 }
+                        )
+                    )
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Activity Level")
+                        .font(.subheadline.weight(.semibold))
+
+                    Text("Consider your overall daily movement, including work and exercise.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    Picker("Select activity level", selection: $activityLevel) {
+                        Text("Sedentary").tag("Sedentary")
+                        Text("Lightly Active").tag("Lightly Active")
+                        Text("Moderately Active").tag("Moderately Active")
+                        Text("Very Active").tag("Very Active")
+                        Text("Extra Active").tag("Extra Active")
+                    }
+                    .pickerStyle(.menu)
+                    .padding()
+                    .background(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Sex for Calorie Equation")
+                        .font(.subheadline.weight(.semibold))
+
+                    Picker("Calculation preference", selection: $metabolicEquationSex) {
+                        Text("Male").tag("Male")
+                        Text("Female").tag("Female")
+                        Text("Prefer not to say").tag("Prefer not to say")
+                    }
+                    .pickerStyle(.menu)
+                    .padding()
+                    .background(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                }
+
+                Text("Your measurements help estimate your nutrition needs. You can update them later.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.vertical, 8)
+        }
+    }
+
+    // MARK: - Page 2: Training Profile
+
+    private var trainingProfilePage: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Primary Sport")
+                        .font(.headline)
+
+                    Picker("Primary Sport", selection: $sport) {
+                        ForEach(sports, id: \.self) { item in
+                            Text(item).tag(item)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+                    .background(Color.trainLightBlue)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                }
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Main Goal")
+                        .font(.headline)
+
+                    Picker("Main Goal", selection: $goal) {
+                        ForEach(goals, id: \.self) { item in
+                            Text(item).tag(item)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+                    .background(Color.trainLightBlue)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                }
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Training Schedule")
+                        .font(.headline)
+
+                    Stepper(
+                        "\(trainingDays) days per week",
+                        value: $trainingDays,
+                        in: 1...7
+                    )
+                    .padding()
+                    .background(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                }
+
+                Text("TrainFUEL will use your details and goals to personalize your nutrition recommendations.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.vertical, 8)
+        }
+    }
+
+    // MARK: - Reusable Measurement Field
+
+    private func measurementField(
+        title: String,
+        placeholder: String,
+        value: Binding<Double>
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+
+            TextField(placeholder, value: value, format: .number)
+                .keyboardType(.decimalPad)
+                .padding()
+                .background(.white)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+        }
+    }
+
+    // MARK: - Imperial Height
+
+    private var imperialHeightFields: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Height")
+                .font(.subheadline.weight(.semibold))
+
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Feet")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    TextField(
+                        "Feet",
+                        value: Binding<Int>(
+                            get: { Int(heightCm / 2.54) / 12 },
+                            set: { feet in
+                                let inches = Int(heightCm / 2.54) % 12
+                                heightCm = Double(feet * 12 + inches) * 2.54
+                            }
+                        ),
+                        format: .number
+                    )
+                    .keyboardType(.numberPad)
+                    .padding()
+                    .background(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Inches")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    TextField(
+                        "Inches",
+                        value: Binding<Int>(
+                            get: { Int(heightCm / 2.54) % 12 },
+                            set: { inches in
+                                let feet = Int(heightCm / 2.54) / 12
+                                heightCm = Double(feet * 12 + inches) * 2.54
+                            }
+                        ),
+                        format: .number
+                    )
+                    .keyboardType(.numberPad)
+                    .padding()
+                    .background(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                }
+            }
+        }
+    }
+
+    // MARK: - Validation
+
+    private func validatePersonalDetails() -> Bool {
+        guard (18...100).contains(age) else {
+            validationError = "Enter an age between 18 and 100."
+            return false
+        }
+
+        guard heightCm.isFinite, (100...250).contains(heightCm) else {
+            validationError = "Enter a valid height between 100 and 250 cm, or the equivalent in feet and inches."
+            return false
+        }
+
+        guard weightKg.isFinite, (30...350).contains(weightKg) else {
+            validationError = "Enter a valid weight between 30 and 350 kg, or the equivalent in pounds."
+            return false
+        }
+
+        return true
+    }
+
+    // MARK: - Save Profile
+
     private func saveProfile() {
+        guard validatePersonalDetails() else {
+            currentPage = 0
+            return
+        }
 
         profileStore.profile = FitnessProfile(
             sport: sport,
             goal: goal,
             trainingDays: trainingDays,
             calorieGoal: calorieGoal,
-            proteinGoal: proteinGoal
+            proteinGoal: proteinGoal,
+            age: age,
+            heightCm: heightCm,
+            weightKg: weightKg,
+            activityLevel: activityLevel,
+            metabolicEquationSex: metabolicEquationSex,
+            measurementUnits: measurementUnits
         )
     }
 }
+
 
 
 // MARK: - DASHBOARD
@@ -2347,6 +2600,19 @@ struct EditProfileView: View {
     @State private var trainingDays: Int
     @State private var calorieGoal: Int
     @State private var proteinGoal: Int
+    
+    @State private var age: Int
+    @State private var heightCm: Double
+    @State private var weightKg: Double
+    @State private var activityLevel: String
+    @State private var metabolicEquationSex: String
+    @State private var validationError: String?
+    
+    @State private var measurementUnits: String
+    @State private var heightFeet: Int
+    @State private var heightInches: Int
+    @State private var weightPounds: Double
+
 
     let sports = [
         "Weight Training",
@@ -2388,6 +2654,28 @@ struct EditProfileView: View {
         _proteinGoal = State(
             initialValue: profileStore.profile.proteinGoal
         )
+        
+        _age = State(initialValue: profileStore.profile.age)
+        _heightCm = State(initialValue: profileStore.profile.heightCm)
+        _weightKg = State(initialValue: profileStore.profile.weightKg)
+        _activityLevel = State(
+            initialValue: profileStore.profile.activityLevel
+        )
+        _metabolicEquationSex = State(
+            initialValue: profileStore.profile.metabolicEquationSex
+        )
+        _measurementUnits = State(
+            initialValue: profileStore.profile.measurementUnits
+        )
+
+        let totalInches = profileStore.profile.heightCm / 2.54
+        _heightFeet = State(initialValue: Int(totalInches) / 12)
+        _heightInches = State(initialValue: Int(totalInches) % 12)
+
+        _weightPounds = State(
+            initialValue: profileStore.profile.weightKg * 2.20462
+        )
+
     }
 
     var body: some View {
@@ -2395,6 +2683,110 @@ struct EditProfileView: View {
         NavigationStack {
 
             Form {
+                if let validationError = validationError {
+                    Section {
+                        Text(validationError)
+                            .foregroundStyle(.red)
+                    }
+                }
+                
+                Section("Personal Details") {
+                    Picker(
+                        "Units",
+                        selection: Binding(
+                            get: { measurementUnits },
+                            set: { changeUnits(to: $0) }
+                        )
+                    ) {
+                        Text("Metric (cm, kg)").tag("Metric")
+                        Text("Imperial (ft, lb)").tag("Imperial")
+                    }
+                    Stepper("Age: \(age)", value: $age, in: 18...100)
+
+                    if measurementUnits == "Metric" {
+                        HStack {
+                            Text("Height (cm)")
+                            Spacer()
+                            TextField(
+                                "Height",
+                                value: $heightCm,
+                                format: .number.precision(.fractionLength(1))
+                            )
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                            .frame(width: 100)
+                        }
+
+                        HStack {
+                            Text("Weight (kg)")
+                            Spacer()
+                            TextField(
+                                "Weight",
+                                value: $weightKg,
+                                format: .number.precision(.fractionLength(1))
+                            )
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                            .frame(width: 100)
+                        }
+                    } else {
+                        HStack {
+                            Text("Height")
+                            Spacer()
+
+                            Picker("Feet", selection: $heightFeet) {
+                                ForEach(3...8, id: \.self) { feet in
+                                    Text("\(feet) ft").tag(feet)
+                                }
+                            }
+                            .labelsHidden()
+
+                            Picker("Inches", selection: $heightInches) {
+                                ForEach(0...11, id: \.self) { inches in
+                                    Text("\(inches) in").tag(inches)
+                                }
+                            }
+                            .labelsHidden()
+                        }
+
+                        HStack {
+                            Text("Weight (lb)")
+                            Spacer()
+                            TextField(
+                                "Weight",
+                                value: $weightPounds,
+                                format: .number.precision(.fractionLength(1))
+                            )
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                            .frame(width: 100)
+                        }
+                    }
+
+                    Picker("Activity Level", selection: $activityLevel) {
+                        Text("Sedentary").tag("Sedentary")
+                        Text("Lightly Active").tag("Lightly Active")
+                        Text("Moderately Active").tag("Moderately Active")
+                        Text("Very Active").tag("Very Active")
+                        Text("Extra Active").tag("Extra Active")
+                    }
+
+                    Picker(
+                        "Equation Setting",
+                        selection: $metabolicEquationSex
+                    ) {
+                        Text("Male").tag("Male")
+                        Text("Female").tag("Female")
+                    }
+
+                    Text(
+                        "The equation setting is used to estimate energy needs. " +
+                        "These calculations are estimates, not medical advice."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+
 
                 Section("Training") {
 
@@ -2463,16 +2855,54 @@ struct EditProfileView: View {
     }
 
     private func save() {
+    
+        guard (18...100).contains(age) else {
+            validationError = "Age must be between 18 and 100."
+            return
+        }
+
+        guard (90...250).contains(heightCm) else {
+            validationError = "Height must be between 100 and 250 cm."
+            return
+        }
+
+        guard (20...350).contains(weightKg) else {
+            validationError = "Weight must be between 30 and 350 kg."
+            return
+        }
+
+        validationError = nil
 
         profileStore.profile = FitnessProfile(
             sport: sport,
             goal: goal,
             trainingDays: trainingDays,
             calorieGoal: calorieGoal,
-            proteinGoal: proteinGoal
+            proteinGoal: proteinGoal,
+            age: age,
+            heightCm: heightCm,
+            weightKg: weightKg,
+            activityLevel: activityLevel,
+            metabolicEquationSex: metabolicEquationSex,
+            measurementUnits: measurementUnits
         )
 
         dismiss()
+    }
+    private func changeUnits(to newUnits: String) {
+        guard newUnits != measurementUnits else { return }
+
+        if newUnits == "Imperial" {
+            let totalInches = heightCm / 2.54
+            heightFeet = Int(totalInches) / 12
+            heightInches = Int(totalInches) % 12
+            weightPounds = weightKg * 2.20462
+        } else {
+            heightCm = Double(heightFeet * 12 + heightInches) * 2.54
+            weightKg = weightPounds / 2.20462
+        }
+
+        measurementUnits = newUnits
     }
 }
 
