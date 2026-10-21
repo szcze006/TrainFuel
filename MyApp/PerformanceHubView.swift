@@ -39,17 +39,13 @@ struct PerformanceHubView: View {
     @ObservedObject var profileStore: ProfileStore
     @ObservedObject var workoutStore: WorkoutStore
     @ObservedObject var mealStore: MealStore
+    @ObservedObject var noteStore: NoteStore
     @State private var section = 0
     @AppStorage("sprint3.water.date") private var waterDate = ""
     @AppStorage("sprint3.water.ml") private var waterML = 0
     @AppStorage("sprint3.water.goal") private var waterGoal = 2500
-    @AppStorage("sprint3.calendar.notes") private var calendarNotes = ""
-    @State private var selectedDay = Date()
 
     private var sport: String { profileStore.profile.sport }
-    private var plan: [PlannedSession] {
-        SportCoach.weeklyPlan(sport, days: profileStore.profile.trainingDays)
-    }
     private var todayKey: String { Self.dateKey(Date()) }
     private var todayWater: Int { waterDate == todayKey ? waterML : 0 }
     private var currentWeekWorkouts: [WorkoutEntry] {
@@ -66,17 +62,15 @@ struct PerformanceHubView: View {
                     Text("Coach").tag(0)
                     Text("Nutrition").tag(1)
                     Text("Water").tag(2)
-                    Text("Calendar").tag(3)
-                    Text("Insights").tag(4)
+                    Text("Insights").tag(3)
                 }
                 .pickerStyle(.menu)
                 .padding(.horizontal)
                 Group {
                     switch section {
-                    case 0: TrainingPlanView(profileStore: profileStore, workoutStore: workoutStore)
+                    case 0: TrainingPlanView(profileStore: profileStore, workoutStore: workoutStore, mealStore: mealStore, noteStore: noteStore)
                     case 1: nutritionPage
                     case 2: waterPage
-                    case 3: calendarPage
                     default: insightsPage
                     }
                 }
@@ -141,55 +135,6 @@ struct PerformanceHubView: View {
         }
     }
 
-    private var calendarPage: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("Weekly training schedule").font(.title2.bold())
-                Text("\(plan.count) planned sessions · \(currentWeekWorkouts.count) workouts logged this week")
-                    .foregroundStyle(.secondary)
-                DatePicker("View day", selection: $selectedDay, displayedComponents: .date)
-                    .datePickerStyle(.graphical)
-                let calendar = Calendar.current
-                let weekday = (calendar.component(.weekday, from: selectedDay) + 5) % 7
-                if weekday < plan.count {
-                    let session = plan[weekday]
-                    Text("Suggested: \(session.id)").font(.headline)
-                    Text("\(session.focus) · \(session.minutes) min")
-                    ForEach(session.exercises) { exercise in
-                        Text("• \(exercise.id): \(exercise.prescription)")
-                    }
-                } else {
-                    Text("Recovery or flexible training day").font(.headline)
-                }
-                let logged = workoutStore.workouts.filter { calendar.isDate($0.date, inSameDayAs: selectedDay) }
-                Text("Logged workouts: \(logged.count)").font(.headline)
-                ForEach(logged) { workout in
-                    Text("✓ \(workout.name) · \(workout.duration) min")
-                }
-                let meals = mealStore.meals(on: selectedDay)
-                Text("Logged meals: \(meals.count)").font(.headline)
-                if meals.isEmpty {
-                    Text("No meals logged").foregroundStyle(.secondary)
-                } else {
-                    Text("Total: \(mealStore.totalCalories(on: selectedDay)) kcal · \(mealStore.totalProtein(on: selectedDay)) g protein · \(mealStore.totalCarbs(on: selectedDay)) g carbs · \(mealStore.totalFat(on: selectedDay)) g fat")
-                        .font(.subheadline)
-                    ForEach(meals) { meal in
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("\(meal.name) · \(meal.calories) kcal")
-                            Text("\(meal.protein) g protein · \(meal.carbs) g carbs · \(meal.fat) g fat")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                }
-                Text("Training notes (saved on this device)").font(.headline)
-                TextEditor(text: $calendarNotes).frame(height: 90)
-                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(.gray.opacity(0.3)))
-                Text("This calendar maps your weekly plan to Monday onward. It does not create calendar events or reschedule sessions automatically.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }.padding()
-        }
-    }
-
     private var insightsPage: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
@@ -243,5 +188,77 @@ struct PerformanceHubView: View {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd"
         return formatter.string(from: date)
+    }
+}
+
+// Shared by the Plan tab and the Performance hub so both show the same calendar and notes.
+struct TrainingCalendarView: View {
+    @ObservedObject var profileStore: ProfileStore
+    @ObservedObject var workoutStore: WorkoutStore
+    @ObservedObject var mealStore: MealStore
+    @ObservedObject var noteStore: NoteStore
+    @State private var selectedDay = Date()
+
+    private var dayNote: Binding<String> {
+        Binding(
+            get: { noteStore.note(for: selectedDay) },
+            set: { noteStore.saveNote($0, for: selectedDay) }
+        )
+    }
+
+    private var plan: [PlannedSession] {
+        SportCoach.weeklyPlan(profileStore.profile.sport, days: profileStore.profile.trainingDays)
+    }
+    private var currentWeekWorkouts: [WorkoutEntry] {
+        workoutStore.workouts.filter {
+            Calendar.current.isDate($0.date, equalTo: Date(), toGranularity: .weekOfYear)
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Weekly training schedule").font(.title2.bold())
+            Text("\(plan.count) planned sessions · \(currentWeekWorkouts.count) workouts logged this week")
+                .foregroundStyle(.secondary)
+            DatePicker("View day", selection: $selectedDay, displayedComponents: .date)
+                .datePickerStyle(.graphical)
+            let calendar = Calendar.current
+            let weekday = (calendar.component(.weekday, from: selectedDay) + 5) % 7
+            if weekday < plan.count {
+                let session = plan[weekday]
+                Text("Suggested: \(session.id)").font(.headline)
+                Text("\(session.focus) · \(session.minutes) min")
+                ForEach(session.exercises) { exercise in
+                    Text("• \(exercise.id): \(exercise.prescription)")
+                }
+            } else {
+                Text("Recovery or flexible training day").font(.headline)
+            }
+            let logged = workoutStore.workouts.filter { calendar.isDate($0.date, inSameDayAs: selectedDay) }
+            Text("Logged workouts: \(logged.count)").font(.headline)
+            ForEach(logged) { workout in
+                Text("✓ \(workout.name) · \(workout.duration) min")
+            }
+            let meals = mealStore.meals(on: selectedDay)
+            Text("Logged meals: \(meals.count)").font(.headline)
+            if meals.isEmpty {
+                Text("No meals logged").foregroundStyle(.secondary)
+            } else {
+                Text("Total: \(mealStore.totalCalories(on: selectedDay)) kcal · \(mealStore.totalProtein(on: selectedDay)) g protein · \(mealStore.totalCarbs(on: selectedDay)) g carbs · \(mealStore.totalFat(on: selectedDay)) g fat")
+                    .font(.subheadline)
+                ForEach(meals) { meal in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(meal.name) · \(meal.calories) kcal")
+                        Text("\(meal.protein) g protein · \(meal.carbs) g carbs · \(meal.fat) g fat")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            Text("Notes for \(selectedDay.formatted(.dateTime.month(.abbreviated).day()))").font(.headline)
+            TextEditor(text: dayNote).frame(height: 90)
+                .overlay(RoundedRectangle(cornerRadius: 10).stroke(.gray.opacity(0.3)))
+            Text("This calendar maps your weekly plan to Monday onward. It does not create calendar events or reschedule sessions automatically.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
     }
 }

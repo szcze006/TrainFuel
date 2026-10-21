@@ -390,6 +390,128 @@ final class WorkoutStore: ObservableObject {
             }
     }
 }
+
+
+// MARK: - TRAINING NOTE STORE
+
+
+final class NoteStore: ObservableObject {
+
+    // Keyed by "yyyy-MM-dd", one note per day
+    @Published var notes: [String: String] = [:]
+
+    private let db = Firestore.firestore()
+    private var pendingSaves: [String: DispatchWorkItem] = [:]
+
+    init() {
+        // Old single note shared by every day; no longer used
+        UserDefaults.standard.removeObject(forKey: "sprint3.calendar.notes")
+        loadNotesFromFirebase()
+    }
+
+    static func dateKey(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
+    }
+
+    func note(for day: Date) -> String {
+        notes[Self.dateKey(day)] ?? ""
+    }
+
+    // MARK: - Save Note
+
+    func saveNote(_ text: String, for day: Date) {
+
+        let key = Self.dateKey(day)
+
+        // Show immediately in the app
+        notes[key] = text.isEmpty ? nil : text
+
+        // Wait until typing pauses before writing to Firestore
+        pendingSaves[key]?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.writeNote(text, key: key)
+        }
+        pendingSaves[key] = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: work)
+    }
+
+    private func writeNote(_ text: String, key: String) {
+
+        pendingSaves[key] = nil
+
+        guard let uid = Auth.auth().currentUser?.uid else {
+            print("No logged-in user.")
+            return
+        }
+
+        let document = db.collection("users")
+            .document(uid)
+            .collection("trainingNotes")
+            .document(key)
+
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            document.delete { error in
+                if let error = error {
+                    print("Error deleting note: \(error.localizedDescription)")
+                }
+            }
+        } else {
+            document.setData([
+                "text": text,
+                "updatedAt": FirebaseFirestore.Timestamp(date: Date())
+            ]) { error in
+                if let error = error {
+                    print("Error saving note: \(error.localizedDescription)")
+                } else {
+                    print("Note successfully saved to Firestore.")
+                }
+            }
+        }
+    }
+
+    // MARK: - Load Notes
+
+    private func loadNotesFromFirebase() {
+
+        guard let uid = Auth.auth().currentUser?.uid else {
+            print("No logged-in user.")
+            return
+        }
+
+        db.collection("users")
+            .document(uid)
+            .collection("trainingNotes")
+            .getDocuments { snapshot, error in
+
+                if let error = error {
+                    print(
+                        "Error loading notes: \(error.localizedDescription)"
+                    )
+                    return
+                }
+
+                guard let documents = snapshot?.documents else {
+                    return
+                }
+
+                var loadedNotes: [String: String] = [:]
+                for document in documents {
+                    if let text = document.data()["text"] as? String {
+                        loadedNotes[document.documentID] = text
+                    }
+                }
+
+                DispatchQueue.main.async {
+                    // Keep anything typed before the load finished
+                    self.notes = loadedNotes.merging(self.notes) { _, local in local }
+
+                    print("Notes successfully loaded from Firestore.")
+                }
+            }
+    }
+}
 // MARK: - FITNESS PROFILE
 
 
@@ -1387,6 +1509,7 @@ struct MainTabView: View {
     @StateObject private var mealStore = MealStore()
     @StateObject private var profileStore = ProfileStore()
     @StateObject private var workoutStore = WorkoutStore()
+    @StateObject private var noteStore = NoteStore()
 
     var body: some View {
 
@@ -1411,22 +1534,23 @@ struct MainTabView: View {
                         .tabItem {
                             Label("Nutrition", systemImage: "fork.knife")
                         }
-                    TrainingPlanView(profileStore: profileStore, workoutStore: workoutStore)
+                    TrainingPlanView(profileStore: profileStore, workoutStore: workoutStore, mealStore: mealStore, noteStore: noteStore)
                         .tabItem { Label("Plan", systemImage: "calendar") }
-                  
-                    PerformanceHubView(
-                        profileStore: profileStore,
-                        workoutStore: workoutStore,
-                        mealStore: mealStore
-                    )
-                    .tabItem {
-                        Label("Performance", systemImage: "chart.bar.fill")
-                    }
 
                     FitnessView(workoutStore: workoutStore)
                         .tabItem {
                             Label("Fitness", systemImage: "figure.run")
                         }
+
+                    PerformanceHubView(
+                        profileStore: profileStore,
+                        workoutStore: workoutStore,
+                        mealStore: mealStore,
+                        noteStore: noteStore
+                    )
+                    .tabItem {
+                        Label("Performance", systemImage: "chart.bar.fill")
+                    }
 
                     ProgressScreen(
                         mealStore: mealStore,

@@ -68,6 +68,8 @@ enum SportCoach {
 struct TrainingPlanView: View {
     @ObservedObject var profileStore: ProfileStore
     @ObservedObject var workoutStore: WorkoutStore
+    @ObservedObject var mealStore: MealStore
+    @ObservedObject var noteStore: NoteStore
     @AppStorage("sprint3.soreness") private var soreness = 2
     @AppStorage("sprint3.sleep") private var sleep = 8
     @State private var selectedSection = 0
@@ -91,10 +93,12 @@ struct TrainingPlanView: View {
                         Text("Training").tag(0)
                         Text("Fueling").tag(1)
                         Text("Recovery").tag(2)
+                        Text("Calendar").tag(3)
                     }.pickerStyle(.segmented)
                     if selectedSection == 0 { trainingContent }
                     else if selectedSection == 1 { fuelingContent }
-                    else { recoveryContent }
+                    else if selectedSection == 2 { recoveryContent }
+                    else { TrainingCalendarView(profileStore: profileStore, workoutStore: workoutStore, mealStore: mealStore, noteStore: noteStore) }
                     Text("Starter recommendations for general education. Adapt exercise difficulty to your ability and seek qualified guidance for injuries or medical nutrition needs.")
                         .font(.caption).foregroundStyle(.secondary)
                 }.padding()
