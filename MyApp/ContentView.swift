@@ -16,14 +16,35 @@ extension Color {
 
 // MARK: - MEAL MODEL
 
+
 struct FoodEntry: Identifiable, Codable {
-    var id = UUID()
+    let id: UUID
     let name: String
     let calories: Int
     let protein: Int
     let carbs: Int
     let fat: Int
+    let date: Date
+
+    init(
+        id: UUID = UUID(),
+        name: String,
+        calories: Int,
+        protein: Int,
+        carbs: Int,
+        fat: Int,
+        date: Date = Date()
+    ) {
+        self.id = id
+        self.name = name
+        self.calories = calories
+        self.protein = protein
+        self.carbs = carbs
+        self.fat = fat
+        self.date = date
+    }
 }
+
 
 
 // MARK: - MEAL STORE
@@ -54,6 +75,29 @@ final class MealStore: ObservableObject {
         foods.reduce(0) { $0 + $1.fat }
     }
     
+    func meals(on date: Date) -> [FoodEntry] {
+        foods.filter {
+            Calendar.current.isDate($0.date, inSameDayAs: date)
+        }
+    }
+    
+    func totalCalories(on date: Date) -> Int {
+        meals(on: date).reduce(0) { $0 + $1.calories }
+    }
+    
+    func totalProtein(on date: Date) -> Int {
+        meals(on: date).reduce(0) { $0 + $1.protein }
+    }
+    
+    func totalCarbs(on date: Date) -> Int {
+        meals(on: date).reduce(0) { $0 + $1.carbs }
+    }
+    
+    func totalFat(on date: Date) -> Int {
+        meals(on: date).reduce(0) { $0 + $1.fat }
+    }
+    
+    
     // MARK: - Add Meal
     
     func addMeal(_ meal: FoodEntry) {
@@ -74,7 +118,7 @@ final class MealStore: ObservableObject {
             "protein": meal.protein,
             "carbs": meal.carbs,
             "fat": meal.fat,
-            "date": Timestamp(date: Date())
+            "date": Timestamp(date: meal.date)
         ]
         
         // users → UID → meals → meal ID
@@ -123,6 +167,7 @@ final class MealStore: ObservableObject {
     
     // MARK: - Load Meals
     
+    
     private func loadMealsFromFirebase() {
         
         guard let uid = Auth.auth().currentUser?.uid else {
@@ -158,13 +203,24 @@ final class MealStore: ObservableObject {
                         return nil
                     }
                     
+                    // Read the saved date from Firebase.
+                    let mealDate: Date
+                    
+                    if let timestamp = data["date"] as? Timestamp {
+                        mealDate = timestamp.dateValue()
+                    } else {
+                        // Don't count older records with missing dates as today's meals.
+                        mealDate = .distantPast
+                    }
+    
                     return FoodEntry(
                         id: UUID(uuidString: document.documentID) ?? UUID(),
                         name: name,
                         calories: calories,
                         protein: protein,
                         carbs: carbs,
-                        fat: fat
+                        fat: fat,
+                        date: mealDate
                     )
                 }
                 
@@ -334,7 +390,130 @@ final class WorkoutStore: ObservableObject {
             }
     }
 }
+
+
+// MARK: - TRAINING NOTE STORE
+
+
+final class NoteStore: ObservableObject {
+
+    // Keyed by "yyyy-MM-dd", one note per day
+    @Published var notes: [String: String] = [:]
+
+    private let db = Firestore.firestore()
+    private var pendingSaves: [String: DispatchWorkItem] = [:]
+
+    init() {
+        // Old single note shared by every day; no longer used
+        UserDefaults.standard.removeObject(forKey: "sprint3.calendar.notes")
+        loadNotesFromFirebase()
+    }
+
+    static func dateKey(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
+    }
+
+    func note(for day: Date) -> String {
+        notes[Self.dateKey(day)] ?? ""
+    }
+
+    // MARK: - Save Note
+
+    func saveNote(_ text: String, for day: Date) {
+
+        let key = Self.dateKey(day)
+
+        // Show immediately in the app
+        notes[key] = text.isEmpty ? nil : text
+
+        // Wait until typing pauses before writing to Firestore
+        pendingSaves[key]?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.writeNote(text, key: key)
+        }
+        pendingSaves[key] = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: work)
+    }
+
+    private func writeNote(_ text: String, key: String) {
+
+        pendingSaves[key] = nil
+
+        guard let uid = Auth.auth().currentUser?.uid else {
+            print("No logged-in user.")
+            return
+        }
+
+        let document = db.collection("users")
+            .document(uid)
+            .collection("trainingNotes")
+            .document(key)
+
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            document.delete { error in
+                if let error = error {
+                    print("Error deleting note: \(error.localizedDescription)")
+                }
+            }
+        } else {
+            document.setData([
+                "text": text,
+                "updatedAt": FirebaseFirestore.Timestamp(date: Date())
+            ]) { error in
+                if let error = error {
+                    print("Error saving note: \(error.localizedDescription)")
+                } else {
+                    print("Note successfully saved to Firestore.")
+                }
+            }
+        }
+    }
+
+    // MARK: - Load Notes
+
+    private func loadNotesFromFirebase() {
+
+        guard let uid = Auth.auth().currentUser?.uid else {
+            print("No logged-in user.")
+            return
+        }
+
+        db.collection("users")
+            .document(uid)
+            .collection("trainingNotes")
+            .getDocuments { snapshot, error in
+
+                if let error = error {
+                    print(
+                        "Error loading notes: \(error.localizedDescription)"
+                    )
+                    return
+                }
+
+                guard let documents = snapshot?.documents else {
+                    return
+                }
+
+                var loadedNotes: [String: String] = [:]
+                for document in documents {
+                    if let text = document.data()["text"] as? String {
+                        loadedNotes[document.documentID] = text
+                    }
+                }
+
+                DispatchQueue.main.async {
+                    // Keep anything typed before the load finished
+                    self.notes = loadedNotes.merging(self.notes) { _, local in local }
+
+                    print("Notes successfully loaded from Firestore.")
+                }
+            }
+    }
+}
 // MARK: - FITNESS PROFILE
+
 
 struct FitnessProfile: Codable {
     var sport: String = ""
@@ -342,12 +521,163 @@ struct FitnessProfile: Codable {
     var trainingDays: Int = 4
     var calorieGoal: Int = 2500
     var proteinGoal: Int = 180
+    var carbsGoal: Int = 300
+    var fatGoal: Int = 80
+
+    // Personal details for TFUEL-54
+    // Zero means the user has not entered this measurement.
+    var age: Int = 0
+    var heightCm: Double = 0
+    var weightKg: Double = 0
+    var activityLevel: String = "Moderately Active"
+    var metabolicEquationSex: String = "Prefer not to say"
+    var measurementUnits: String = "Metric"
 
     var isComplete: Bool {
         !sport.isEmpty && !goal.isEmpty
     }
+
+    var hasValidPersonalDetails: Bool {
+        (18...100).contains(age) &&
+        (100...250).contains(heightCm) &&
+        (30...350).contains(weightKg)
+    }
 }
 
+struct NutritionTargets {
+    let calories: Int
+    let protein: Int
+    let carbs: Int
+    let fat: Int
+}
+
+enum NutritionCalculator {
+
+    static func calculate(
+        profile: FitnessProfile
+    ) -> NutritionTargets? {
+
+        guard profile.hasValidPersonalDetails else {
+            return nil
+        }
+
+        let weight = profile.weightKg
+        let height = profile.heightCm
+        let age = Double(profile.age)
+
+        // Mifflin–St Jeor equation.
+        let sexAdjustment: Double
+
+        switch profile.metabolicEquationSex {
+        case "Male":
+            sexAdjustment = 5
+        case "Female":
+            sexAdjustment = -161
+        default:
+            // Neutral midpoint when the user prefers not to say.
+            sexAdjustment = -78
+        }
+
+        let bmr =
+            (10 * weight) +
+            (6.25 * height) -
+            (5 * age) +
+            sexAdjustment
+
+        let activityMultiplier: Double
+
+        switch profile.activityLevel {
+        case "Sedentary":
+            activityMultiplier = 1.2
+        case "Lightly Active":
+            activityMultiplier = 1.375
+        case "Moderately Active":
+            activityMultiplier = 1.55
+        case "Very Active":
+            activityMultiplier = 1.725
+        case "Extra Active":
+            activityMultiplier = 1.9
+        default:
+            activityMultiplier = 1.55
+        }
+
+        let maintenanceCalories = bmr * activityMultiplier
+
+        let calorieAdjustment: Double
+
+        switch profile.goal {
+        case "Build Muscle":
+            calorieAdjustment = 1.10
+        case "Lose Fat":
+            calorieAdjustment = 0.85
+        case "Maintain Weight":
+            calorieAdjustment = 1.0
+        case "Improve Performance":
+            calorieAdjustment = 1.05
+        default:
+            calorieAdjustment = 1.0
+        }
+
+        let calories = max(
+            1200,
+            Int((maintenanceCalories * calorieAdjustment).rounded())
+        )
+
+        // Protein targets in grams per kilogram of body weight.
+        let proteinMultiplier: Double
+
+        switch profile.goal {
+        case "Build Muscle":
+            proteinMultiplier = 2.0
+        case "Lose Fat":
+            proteinMultiplier = 2.0
+        case "Maintain Weight":
+            proteinMultiplier = 1.6
+        case "Improve Performance":
+            proteinMultiplier = 1.8
+        default:
+            proteinMultiplier = 1.6
+        }
+
+        let protein = Int(
+            (weight * proteinMultiplier).rounded()
+        )
+
+        let macros = carbsAndFat(
+            calories: calories,
+            protein: protein
+        )
+
+        return NutritionTargets(
+            calories: calories,
+            protein: protein,
+            carbs: macros.carbs,
+            fat: macros.fat
+        )
+    }
+
+    // Split remaining calories 2:1 between carbs and fat.
+    static func carbsAndFat(
+        calories: Int,
+        protein: Int
+    ) -> (carbs: Int, fat: Int) {
+
+        let remainingCalories = max(
+            0,
+            calories - (protein * 4)
+        )
+
+        let carbs = Int(
+            (Double(remainingCalories) * (2.0 / 3.0) / 4).rounded()
+        )
+
+        let fat = Int(
+            (Double(remainingCalories) * (1.0 / 3.0) / 9).rounded()
+        )
+
+        return (carbs, fat)
+    }
+}
 
 // MARK: - PROFILE STORE
 
@@ -357,6 +687,21 @@ final class ProfileStore: ObservableObject {
         didSet {
             saveProfileToFirebase()
         }
+    }
+    func updateNutritionTargets() {
+        guard let targets = NutritionCalculator.calculate(
+            profile: profile
+        ) else {
+            return
+        }
+
+        var updatedProfile = profile
+        updatedProfile.calorieGoal = targets.calories
+        updatedProfile.proteinGoal = targets.protein
+        updatedProfile.carbsGoal = targets.carbs
+        updatedProfile.fatGoal = targets.fat
+
+        profile = updatedProfile
     }
 
     private let db = Firestore.firestore()
@@ -396,7 +741,17 @@ final class ProfileStore: ObservableObject {
             "goal": profile.goal,
             "trainingDays": profile.trainingDays,
             "calorieGoal": profile.calorieGoal,
-            "proteinGoal": profile.proteinGoal
+            "proteinGoal": profile.proteinGoal,
+            "carbsGoal": profile.carbsGoal,
+            "fatGoal": profile.fatGoal,
+            
+            "age": profile.age,
+            "heightCm": profile.heightCm,
+            "weightKg": profile.weightKg,
+            "activityLevel": profile.activityLevel,
+            "metabolicEquationSex": profile.metabolicEquationSex,
+            "measurementUnits": profile.measurementUnits
+
         ]
 
         profileReference.setData(profileData) { error in
@@ -443,7 +798,18 @@ final class ProfileStore: ObservableObject {
                 goal: data["goal"] as? String ?? "",
                 trainingDays: data["trainingDays"] as? Int ?? 4,
                 calorieGoal: data["calorieGoal"] as? Int ?? 2500,
-                proteinGoal: data["proteinGoal"] as? Int ?? 180
+                proteinGoal: data["proteinGoal"] as? Int ?? 180,
+                carbsGoal: data["carbsGoal"] as? Int ?? 300,
+                fatGoal: data["fatGoal"] as? Int ?? 80,
+                
+                age: data["age"] as? Int ?? 0,
+                heightCm: data["heightCm"] as? Double ?? 0,
+                weightKg: data["weightKg"] as? Double ?? 0,
+                activityLevel: data["activityLevel"] as? String ?? "Moderately Active",
+                metabolicEquationSex: data["metabolicEquationSex"] as? String ?? "Prefer not to say",
+                
+                measurementUnits: data["measurementUnits"] as? String ?? "Metric"
+
             )
 
             DispatchQueue.main.async {
@@ -550,21 +916,41 @@ final class ProfileStore: ObservableObject {
 
 // MARK: - ROOT
 
+
 struct ContentView: View {
 
     @State private var user = Auth.auth().currentUser
+    @State private var verificationCompleted = false
 
     var body: some View {
         Group {
-            if user != nil {
-                MainTabView(user: $user)
+            if let currentUser = user {
+                if currentUser.isEmailVerified ||
+                    verificationCompleted ||
+                    currentUser.providerData.contains(where: {
+                        $0.providerID == "apple.com"
+                    }) {
+                    MainTabView(user: $user)
+                } else {
+                    EmailVerificationView(
+                        user: $user,
+                        onVerified: {
+                            verificationCompleted = true
+                            user = Auth.auth().currentUser
+                        }
+                    )
+                }
             } else {
                 WelcomeView(user: $user)
             }
         }
         .preferredColorScheme(.light)
+        .onAppear {
+            user = Auth.auth().currentUser
+        }
     }
 }
+
 
 
 // MARK: - WELCOME
@@ -664,6 +1050,8 @@ struct LoginView: View {
     @State private var password = ""
     @State private var errorMessage = ""
     @State private var isLoading = false
+    @State private var showResetAlert = false
+    @State private var resetMessage = ""
 
     var body: some View {
 
@@ -719,12 +1107,24 @@ struct LoginView: View {
             .foregroundStyle(Color.white)
             .clipShape(RoundedRectangle(cornerRadius: 14))
             .disabled(isLoading || email.isEmpty || password.isEmpty)
+            
+            Button("Forgot Password?") {
+                sendPasswordReset()
+            }
+            .font(.subheadline)
+            .foregroundStyle(Color.trainBlue)
+            .disabled(isLoading || email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
             Spacer()
         }
         .padding(25)
         .navigationTitle("Log In")
         .navigationBarTitleDisplayMode(.inline)
+        .alert("Password Reset", isPresented: $showResetAlert) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(resetMessage)
+        }
     }
 
     private func login() {
@@ -739,12 +1139,51 @@ struct LoginView: View {
 
             isLoading = false
 
-            if let error = error {
-                errorMessage = error.localizedDescription
+            if let error = error as NSError? {
+                switch AuthErrorCode(rawValue: error.code) {
+                case .wrongPassword, .invalidCredential:
+                    errorMessage = "Email or password is incorrect."
+                case .invalidEmail:
+                    errorMessage = "Please enter a valid email address."
+                case .userDisabled:
+                    errorMessage = "This account has been disabled. Contact support."
+                case .networkError:
+                    errorMessage = "Network error. Check your internet connection."
+                case .tooManyRequests:
+                    errorMessage = "Too many attempts. Please try again later."
+                default:
+                    errorMessage = "Unable to log in. Please try again."
+                }
                 return
             }
 
             user = result?.user
+        }
+    }
+    
+    private func sendPasswordReset() {
+        let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        errorMessage = ""
+
+        guard !trimmedEmail.isEmpty else {
+            errorMessage = "Please enter your email address first."
+            return
+        }
+
+        isLoading = true
+
+        Auth.auth().sendPasswordReset(withEmail: trimmedEmail) { error in
+            isLoading = false
+
+            if let error = error {
+                errorMessage = "Unable to send reset email. Check the email address and try again."
+                print("Password reset error: \(error.localizedDescription)")
+                return
+            }
+
+            resetMessage = "If an account exists for this email, a password reset email has been sent."
+            showResetAlert = true
         }
     }
 }
@@ -761,6 +1200,7 @@ struct SignUpView: View {
     @State private var password = ""
     @State private var errorMessage = ""
     @State private var isLoading = false
+
 
     var body: some View {
 
@@ -831,7 +1271,10 @@ struct SignUpView: View {
         }
         .navigationTitle("Sign Up")
         .navigationBarTitleDisplayMode(.inline)
+        
+        
     }
+    
 
     private func createAccount() {
 
@@ -859,9 +1302,24 @@ struct SignUpView: View {
             password: password
         ) { result, error in
 
-            if let error = error {
+            if let error = error as NSError? {
                 isLoading = false
-                errorMessage = error.localizedDescription
+
+                switch AuthErrorCode(rawValue: error.code) {
+                case .emailAlreadyInUse:
+                    errorMessage = "An account with this email already exists."
+                case .invalidEmail:
+                    errorMessage = "Please enter a valid email address."
+                case .weakPassword:
+                    errorMessage = "Please choose a stronger password."
+                case .networkError:
+                    errorMessage = "Network error. Check your internet connection."
+                case .tooManyRequests:
+                    errorMessage = "Too many attempts. Please try again later."
+                default:
+                    errorMessage = "Unable to create your account. Please try again."
+                }
+
                 return
             }
 
@@ -876,19 +1334,171 @@ struct SignUpView: View {
 
             request.commitChanges { error in
 
-                isLoading = false
-
-                if let error = error {
-                    errorMessage = error.localizedDescription
+                if error != nil {
+                    DispatchQueue.main.async {
+                        isLoading = false
+                        errorMessage = "Your account was created, but your profile could not be saved. Please try signing in again."
+                    }
                     return
                 }
 
-                user = Auth.auth().currentUser
+                firebaseUser.sendEmailVerification { error in
+                    DispatchQueue.main.async {
+                        isLoading = false
+
+                        if error != nil {
+                            errorMessage = "Your account was created, but we couldn't send the verification email. Please try signing in to resend it."
+                            return
+                        }
+
+                        user = Auth.auth().currentUser
+                    }
+                }
             }
         }
     }
 }
 
+// MARK: - EMAIL VERIFICATION VIEW
+struct EmailVerificationView: View {
+
+    @Binding var user: User?
+    var onVerified: () -> Void
+    @Environment(\.scenePhase) private var scenePhase
+
+    @State private var message = ""
+    @State private var isLoading = false
+
+    var body: some View {
+        VStack(spacing: 22) {
+
+            Image(systemName: "envelope.badge.shield.half.filled")
+                .font(.system(size: 68))
+                .foregroundStyle(Color.trainBlue)
+
+            Text("Verify Your Email")
+                .font(.largeTitle.bold())
+
+            Text("We've sent a verification link to:")
+                .foregroundStyle(.secondary)
+
+            Text(user?.email ?? "your email address")
+                .fontWeight(.semibold)
+                .multilineTextAlignment(.center)
+
+            Text("Verify your email using the link we sent. Then return here to continue to TrainFUEL.")
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.secondary)
+
+            if !message.isEmpty {
+                Text(message)
+                    .font(.caption)
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(Color.trainBlue)
+            }
+
+            Button {
+                checkVerification()
+            } label: {
+                if isLoading {
+                    ProgressView()
+                        .frame(maxWidth: .infinity)
+                } else {
+                    Text("I've Verified My Email")
+                        .fontWeight(.bold)
+                        .frame(maxWidth: .infinity)
+                }
+            }
+            .padding()
+            .background(Color.trainBlue)
+            .foregroundStyle(.white)
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .disabled(isLoading)
+
+            Button("Resend Verification Email") {
+                resendVerification()
+            }
+            .foregroundStyle(Color.trainBlue)
+            .disabled(isLoading)
+
+            Button("Sign Out", role: .destructive) {
+                do {
+                    try Auth.auth().signOut()
+                    user = nil
+                } catch {
+                    message = "Unable to sign out. Please try again."
+                }
+            }
+        }
+        .padding(28)
+        .onAppear {
+            checkVerification()
+        }
+        .onChange(of: scenePhase) {
+            if scenePhase == .active {
+                checkVerification()
+            }
+        }
+    }
+
+    private func checkVerification() {
+        guard let currentUser = Auth.auth().currentUser else {
+            user = nil
+            return
+        }
+
+        isLoading = true
+
+        currentUser.reload { error in
+            DispatchQueue.main.async {
+                isLoading = false
+
+                if error != nil {
+                    message = "Couldn't check verification status. Check your connection and try again."
+                    return
+                }
+
+                guard let refreshedUser = Auth.auth().currentUser else {
+                    user = nil
+                    return
+                }
+
+                
+                user = refreshedUser
+                print("Email verified:", refreshedUser.isEmailVerified)
+
+                if refreshedUser.isEmailVerified {
+                    message = "Email verified! Opening TrainFUEL..."
+                    onVerified()
+                } else {
+                    message = "Your email isn't verified yet. Open the verification link in your inbox, then try again."
+                }
+
+            }
+        }
+    }
+
+    private func resendVerification() {
+        guard let currentUser = Auth.auth().currentUser else {
+            user = nil
+            return
+        }
+
+        isLoading = true
+
+        currentUser.sendEmailVerification { error in
+            DispatchQueue.main.async {
+                isLoading = false
+
+                if error != nil {
+                    message = "Couldn't send the email. Check your connection and try again."
+                } else {
+                    message = "Verification email sent. Check your inbox and spam folder."
+                }
+            }
+        }
+    }
+}
 
 // MARK: - MAIN APP
 
@@ -899,6 +1509,7 @@ struct MainTabView: View {
     @StateObject private var mealStore = MealStore()
     @StateObject private var profileStore = ProfileStore()
     @StateObject private var workoutStore = WorkoutStore()
+    @StateObject private var noteStore = NoteStore()
 
     var body: some View {
 
@@ -916,26 +1527,30 @@ struct MainTabView: View {
                         Label("Home", systemImage: "house.fill")
                     }
 
-                    NutritionView(mealStore: mealStore)
+                    NutritionView(
+                        mealStore: mealStore,
+                        profileStore: profileStore
+                    )
                         .tabItem {
                             Label("Nutrition", systemImage: "fork.knife")
                         }
-                    TrainingPlanView(profileStore: profileStore, workoutStore: workoutStore)
+                    TrainingPlanView(profileStore: profileStore, workoutStore: workoutStore, mealStore: mealStore, noteStore: noteStore)
                         .tabItem { Label("Plan", systemImage: "calendar") }
-                  
-                    PerformanceHubView(
-                        profileStore: profileStore,
-                        workoutStore: workoutStore,
-                        mealStore: mealStore
-                    )
-                    .tabItem {
-                        Label("Performance", systemImage: "chart.bar.fill")
-                    }
 
                     FitnessView(workoutStore: workoutStore)
                         .tabItem {
                             Label("Fitness", systemImage: "figure.run")
                         }
+
+                    PerformanceHubView(
+                        profileStore: profileStore,
+                        workoutStore: workoutStore,
+                        mealStore: mealStore,
+                        noteStore: noteStore
+                    )
+                    .tabItem {
+                        Label("Performance", systemImage: "chart.bar.fill")
+                    }
 
                     ProgressScreen(
                         mealStore: mealStore,
@@ -971,168 +1586,402 @@ struct MainTabView: View {
 
 // MARK: - PROFILE SETUP
 
+
 struct SetupProfileView: View {
 
     @ObservedObject var profileStore: ProfileStore
 
+    @State private var currentPage = 0
+    @State private var validationError: String?
+
     @State private var sport = "Weight Training"
     @State private var goal = "Build Muscle"
     @State private var trainingDays = 4
+
+    // Fallback targets; replaced by NutritionCalculator in saveProfile().
     @State private var calorieGoal = 2500
     @State private var proteinGoal = 180
 
-    let sports = [
-        "Weight Training",
-        "Soccer",
-        "Basketball",
-        "Football",
-        "Running",
-        "Volleyball",
-        "Other"
+    @State private var age = 0
+    @State private var heightCm = 0.0
+    @State private var weightKg = 0.0
+    @State private var activityLevel = "Moderately Active"
+    @State private var metabolicEquationSex = "Prefer not to say"
+    @State private var measurementUnits = "Metric"
+
+    private let sports = [
+        "Weight Training", "Soccer", "Basketball",
+        "Football", "Running", "Volleyball", "Other"
     ]
 
-    let goals = [
-        "Build Muscle",
-        "Lose Fat",
-        "Maintain Weight",
-        "Improve Performance"
+    private let goals = [
+        "Build Muscle", "Lose Fat",
+        "Maintain Weight", "Improve Performance"
     ]
 
     var body: some View {
-
         NavigationStack {
+            VStack(spacing: 16) {
 
-            ScrollView {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(currentPage == 0 ? "Personal Details" : "Training Profile")
+                        .font(.largeTitle.bold())
 
-                VStack(alignment: .leading, spacing: 24) {
+                    Text(currentPage == 0
+                         ? "Tell us about yourself."
+                         : "Tell us about your training goals.")
 
-                    VStack(alignment: .leading, spacing: 8) {
+                    Text("Step \(currentPage + 1) of 2")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color.trainBlue)
 
-                        Image(systemName: "figure.run.circle.fill")
-                            .font(.system(size: 60))
-                            .foregroundStyle(Color.trainBlue)
+                    ProgressView(value: Double(currentPage + 1), total: 2)
+                        .tint(Color.trainBlue)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-                        Text("Build Your Plan")
-                            .font(.largeTitle.bold())
-
-                        Text(
-                            "Tell TrainFUEL about your training so we can personalize your nutrition plan."
-                        )
-                        .foregroundStyle(Color.secondary)
+                Group {
+                    if currentPage == 0 {
+                        personalDetailsPage
+                    } else {
+                        trainingProfilePage
                     }
+                }
+                .frame(maxHeight: .infinity)
 
-                    VStack(alignment: .leading, spacing: 10) {
+                if let validationError {
+                    Text(validationError)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
 
-                        Text("Primary Sport")
-                            .font(.headline)
-
-                        Picker("Primary Sport", selection: $sport) {
-                            ForEach(sports, id: \.self) {
-                                Text($0)
-                            }
+                HStack(spacing: 12) {
+                    if currentPage == 1 {
+                        Button("Back") {
+                            validationError = nil
+                            currentPage = 0
                         }
-                        .pickerStyle(.menu)
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(Color.trainLightBlue)
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
-                    }
-
-                    VStack(alignment: .leading, spacing: 10) {
-
-                        Text("Main Goal")
-                            .font(.headline)
-
-                        Picker("Goal", selection: $goal) {
-                            ForEach(goals, id: \.self) {
-                                Text($0)
-                            }
-                        }
-                        .pickerStyle(.menu)
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(Color.trainLightBlue)
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
-                    }
-
-                    VStack(alignment: .leading, spacing: 10) {
-
-                        Text("Training Schedule")
-                            .font(.headline)
-
-                        Stepper(
-                            "\(trainingDays) days per week",
-                            value: $trainingDays,
-                            in: 1...7
-                        )
-                        .padding()
-                        .background(Color.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
-                    }
-
-                    VStack(alignment: .leading, spacing: 10) {
-
-                        Text("Daily Calorie Goal")
-                            .font(.headline)
-
-                        Stepper(
-                            "\(calorieGoal) calories",
-                            value: $calorieGoal,
-                            in: 1200...5000,
-                            step: 100
-                        )
-                        .padding()
-                        .background(Color.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
-                    }
-
-                    VStack(alignment: .leading, spacing: 10) {
-
-                        Text("Daily Protein Goal")
-                            .font(.headline)
-
-                        Stepper(
-                            "\(proteinGoal)g protein",
-                            value: $proteinGoal,
-                            in: 50...300,
-                            step: 5
-                        )
-                        .padding()
-                        .background(Color.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                        .buttonStyle(.bordered)
                     }
 
                     Button {
-                        saveProfile()
+                        if currentPage == 0 {
+                            if validatePersonalDetails() {
+                                validationError = nil
+                                currentPage = 1
+                            }
+                        } else {
+                            saveProfile()
+                        }
                     } label: {
-
-                        Text("Create My Plan")
+                        Text(currentPage == 0 ? "Continue" : "Create My Plan")
                             .fontWeight(.bold)
                             .frame(maxWidth: .infinity)
                             .padding()
                             .background(Color.trainBlue)
-                            .foregroundStyle(Color.white)
+                            .foregroundStyle(.white)
                             .clipShape(RoundedRectangle(cornerRadius: 15))
                     }
                 }
-                .padding()
             }
+            .padding()
             .background(Color.trainBackground)
             .navigationTitle("Setup")
+            .navigationBarTitleDisplayMode(.inline)
         }
     }
 
-    private func saveProfile() {
+    // MARK: - Page 1: Personal Details
 
-        profileStore.profile = FitnessProfile(
+    private var personalDetailsPage: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+
+                Text("Your Measurements")
+                    .font(.headline)
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Age")
+                        .font(.subheadline.weight(.semibold))
+
+                    TextField("Age in years", value: $age, format: .number)
+                        .keyboardType(.numberPad)
+                        .padding()
+                        .background(.white)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                }
+
+                Picker("Units", selection: $measurementUnits) {
+                    Text("Metric (cm, kg)").tag("Metric")
+                    Text("Imperial (ft, lb)").tag("Imperial")
+                }
+                .pickerStyle(.menu)
+                .padding()
+                .background(.white)
+                .clipShape(RoundedRectangle(cornerRadius: 14))
+
+                if measurementUnits == "Metric" {
+                    measurementField(
+                        title: "Height (cm)",
+                        placeholder: "Height in centimeters",
+                        value: $heightCm
+                    )
+
+                    measurementField(
+                        title: "Weight (kg)",
+                        placeholder: "Weight in kilograms",
+                        value: $weightKg
+                    )
+                } else {
+                    imperialHeightFields
+
+                    measurementField(
+                        title: "Weight (lb)",
+                        placeholder: "Weight in pounds",
+                        value: Binding(
+                            get: { weightKg * 2.20462 },
+                            set: { weightKg = $0 / 2.20462 }
+                        )
+                    )
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Activity Level")
+                        .font(.subheadline.weight(.semibold))
+
+                    Text("Consider your overall daily movement, including work and exercise.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    Picker("Select activity level", selection: $activityLevel) {
+                        Text("Sedentary").tag("Sedentary")
+                        Text("Lightly Active").tag("Lightly Active")
+                        Text("Moderately Active").tag("Moderately Active")
+                        Text("Very Active").tag("Very Active")
+                        Text("Extra Active").tag("Extra Active")
+                    }
+                    .pickerStyle(.menu)
+                    .padding()
+                    .background(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Sex for Calorie Equation")
+                        .font(.subheadline.weight(.semibold))
+
+                    Picker("Calculation preference", selection: $metabolicEquationSex) {
+                        Text("Male").tag("Male")
+                        Text("Female").tag("Female")
+                        Text("Prefer not to say").tag("Prefer not to say")
+                    }
+                    .pickerStyle(.menu)
+                    .padding()
+                    .background(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                }
+
+                Text("Your measurements help estimate your nutrition needs. You can update them later.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.vertical, 8)
+        }
+    }
+
+    // MARK: - Page 2: Training Profile
+
+    private var trainingProfilePage: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Primary Sport")
+                        .font(.headline)
+
+                    Picker("Primary Sport", selection: $sport) {
+                        ForEach(sports, id: \.self) { item in
+                            Text(item).tag(item)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+                    .background(Color.trainLightBlue)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                }
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Main Goal")
+                        .font(.headline)
+
+                    Picker("Main Goal", selection: $goal) {
+                        ForEach(goals, id: \.self) { item in
+                            Text(item).tag(item)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+                    .background(Color.trainLightBlue)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                }
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Training Schedule")
+                        .font(.headline)
+
+                    Stepper(
+                        "\(trainingDays) days per week",
+                        value: $trainingDays,
+                        in: 1...7
+                    )
+                    .padding()
+                    .background(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                }
+
+                Text("TrainFUEL will use your details and goals to personalize your nutrition recommendations.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.vertical, 8)
+        }
+    }
+
+    // MARK: - Reusable Measurement Field
+
+    private func measurementField(
+        title: String,
+        placeholder: String,
+        value: Binding<Double>
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+
+            TextField(placeholder, value: value, format: .number)
+                .keyboardType(.decimalPad)
+                .padding()
+                .background(.white)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+        }
+    }
+
+    // MARK: - Imperial Height
+
+    private var imperialHeightFields: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Height")
+                .font(.subheadline.weight(.semibold))
+
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Feet")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    TextField(
+                        "Feet",
+                        value: Binding<Int>(
+                            get: { Int(heightCm / 2.54) / 12 },
+                            set: { feet in
+                                let inches = Int(heightCm / 2.54) % 12
+                                heightCm = Double(feet * 12 + inches) * 2.54
+                            }
+                        ),
+                        format: .number
+                    )
+                    .keyboardType(.numberPad)
+                    .padding()
+                    .background(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Inches")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
+                    TextField(
+                        "Inches",
+                        value: Binding<Int>(
+                            get: { Int(heightCm / 2.54) % 12 },
+                            set: { inches in
+                                let feet = Int(heightCm / 2.54) / 12
+                                heightCm = Double(feet * 12 + inches) * 2.54
+                            }
+                        ),
+                        format: .number
+                    )
+                    .keyboardType(.numberPad)
+                    .padding()
+                    .background(.white)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                }
+            }
+        }
+    }
+
+    // MARK: - Validation
+
+    private func validatePersonalDetails() -> Bool {
+        guard (18...100).contains(age) else {
+            validationError = "Enter an age between 18 and 100."
+            return false
+        }
+
+        guard heightCm.isFinite, (100...250).contains(heightCm) else {
+            validationError = "Enter a valid height between 100 and 250 cm, or the equivalent in feet and inches."
+            return false
+        }
+
+        guard weightKg.isFinite, (30...350).contains(weightKg) else {
+            validationError = "Enter a valid weight between 30 and 350 kg, or the equivalent in pounds."
+            return false
+        }
+
+        return true
+    }
+
+    // MARK: - Save Profile
+
+    private func saveProfile() {
+        guard validatePersonalDetails() else {
+            currentPage = 0
+            return
+        }
+
+        var newProfile = FitnessProfile(
             sport: sport,
             goal: goal,
             trainingDays: trainingDays,
             calorieGoal: calorieGoal,
-            proteinGoal: proteinGoal
+            proteinGoal: proteinGoal,
+            carbsGoal: 300,
+            fatGoal: 80,
+            age: age,
+            heightCm: heightCm,
+            weightKg: weightKg,
+            activityLevel: activityLevel,
+            metabolicEquationSex: metabolicEquationSex,
+            measurementUnits: measurementUnits
         )
+
+        if let targets = NutritionCalculator.calculate(
+            profile: newProfile
+        ) {
+            newProfile.calorieGoal = targets.calories
+            newProfile.proteinGoal = targets.protein
+            newProfile.carbsGoal = targets.carbs
+            newProfile.fatGoal = targets.fat
+        }
+
+        profileStore.profile = newProfile
     }
 }
+
 
 
 // MARK: - DASHBOARD
@@ -1149,6 +1998,25 @@ struct DashboardView: View {
     var proteinGoal: Int {
         profileStore.profile.proteinGoal
     }
+    var todayCalories: Int {
+        mealStore.totalCalories(on: Date())
+    }
+
+    var todayProtein: Int {
+        mealStore.totalProtein(on: Date())
+    }
+
+    var todayCarbs: Int {
+        mealStore.totalCarbs(on: Date())
+    }
+
+    var todayFat: Int {
+        mealStore.totalFat(on: Date())
+    }
+
+    var todayMeals: [FoodEntry] {
+        mealStore.meals(on: Date())
+    }
 
     var caloriePercentage: Int {
 
@@ -1157,7 +2025,7 @@ struct DashboardView: View {
         }
 
         return Int(
-            Double(mealStore.totalCalories)
+            Double(todayCalories)
             / Double(calorieGoal)
             * 100
         )
@@ -1198,7 +2066,7 @@ struct DashboardView: View {
 
                             VStack(alignment: .leading, spacing: 4) {
 
-                                Text("\(mealStore.totalCalories)")
+                                Text("\(todayCalories)")
                                     .font(
                                         .system(
                                             size: 34,
@@ -1211,7 +2079,7 @@ struct DashboardView: View {
                                     .foregroundStyle(Color.secondary)
 
                                 Text(
-                                    "\(max(calorieGoal - mealStore.totalCalories, 0)) remaining"
+                                    "\(max(calorieGoal - todayCalories, 0)) remaining"
                                 )
                                 .font(.caption)
                                 .foregroundStyle(Color.secondary)
@@ -1231,7 +2099,7 @@ struct DashboardView: View {
                                     .trim(
                                         from: 0,
                                         to: min(
-                                            Double(mealStore.totalCalories)
+                                            Double(todayCalories)
                                             / Double(calorieGoal),
                                             1
                                         )
@@ -1266,19 +2134,19 @@ struct DashboardView: View {
 
                         MacroCard(
                             title: "Protein",
-                            amount: "\(mealStore.totalProtein)g",
+                            amount: "\(todayProtein)g",
                             goal: "\(proteinGoal)g"
                         )
 
                         MacroCard(
                             title: "Carbs",
-                            amount: "\(mealStore.totalCarbs)g",
+                            amount: "\(todayCarbs)g",
                             goal: "Tracked"
                         )
 
                         MacroCard(
                             title: "Fat",
-                            amount: "\(mealStore.totalFat)g",
+                            amount: "\(todayFat)g",
                             goal: "Tracked"
                         )
                     }
@@ -1325,7 +2193,7 @@ struct DashboardView: View {
                         .font(.headline)
                         .foregroundStyle(Color.trainBlue)
 
-                        if mealStore.foods.isEmpty {
+                        if todayMeals.isEmpty {
 
                             Text("No meals logged yet")
                                 .font(.title3.bold())
@@ -1338,12 +2206,12 @@ struct DashboardView: View {
                         } else {
 
                             Text(
-                                "\(mealStore.foods.count) meal\(mealStore.foods.count == 1 ? "" : "s") logged"
+                                "\(todayMeals.count) meal\(todayMeals.count == 1 ? "" : "s") logged"
                             )
                             .font(.title3.bold())
 
                             Text(
-                                "\(mealStore.totalCalories) calories and \(mealStore.totalProtein)g protein logged today."
+                                "\(todayCalories) calories and \(todayProtein)g protein logged today."
                             )
                             .foregroundStyle(Color.secondary)
                         }
@@ -1397,14 +2265,74 @@ struct MacroCard: View {
     }
 }
 
+struct NutritionProgressRow: View {
+
+    let title: String
+    let consumed: Int
+    let target: Int
+    let unit: String
+
+    private var progress: Double {
+        guard target > 0 else { return 0 }
+        return min(Double(consumed) / Double(target), 1.0)
+    }
+
+    private var remaining: Int {
+        max(target - consumed, 0)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+
+            HStack {
+                Text(title)
+                    .font(.headline)
+
+                Spacer()
+
+                Text("\(consumed) / \(target) \(unit)")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+
+            ProgressView(value: progress)
+                .tint(Color.trainBlue)
+
+            HStack {
+                if consumed >= target {
+                    Text("Target reached")
+                        .foregroundStyle(.green)
+                } else {
+                    Text("\(remaining) \(unit) remaining")
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                Text("\(Int(progress * 100))%")
+                    .foregroundStyle(.secondary)
+            }
+            .font(.caption)
+        }
+        .padding()
+        .background(Color.white)
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .shadow(color: Color.black.opacity(0.05), radius: 5)
+    }
+}
+
 
 // MARK: - NUTRITION
 
 struct NutritionView: View {
 
     @ObservedObject var mealStore: MealStore
+    @ObservedObject var profileStore: ProfileStore
 
     @State private var showAddMeal = false
+    private var todayMeals: [FoodEntry] {
+        mealStore.meals(on: Date())
+    }
 
     var body: some View {
 
@@ -1412,53 +2340,74 @@ struct NutritionView: View {
 
             VStack(spacing: 12) {
 
-                HStack(spacing: 10) {
+                
+                VStack(spacing: 12) {
 
-                    StatBox(
+                    NutritionProgressRow(
                         title: "Calories",
-                        value: "\(mealStore.totalCalories)"
+                        consumed: mealStore.totalCalories(on: Date()),
+                        target: profileStore.profile.calorieGoal,
+                        unit: "kcal"
                     )
 
-                    StatBox(
+                    NutritionProgressRow(
                         title: "Protein",
-                        value: "\(mealStore.totalProtein)g"
-                    )
-                }
-                .padding(.horizontal)
-
-                HStack(spacing: 10) {
-
-                    StatBox(
-                        title: "Carbs",
-                        value: "\(mealStore.totalCarbs)g"
+                        consumed: mealStore.totalProtein(on: Date()),
+                        target: profileStore.profile.proteinGoal,
+                        unit: "g"
                     )
 
-                    StatBox(
+                    NutritionProgressRow(
+                        title: "Carbohydrates",
+                        consumed: mealStore.totalCarbs(on: Date()),
+                        target: profileStore.profile.carbsGoal,
+                        unit: "g"
+                    )
+
+                    NutritionProgressRow(
                         title: "Fat",
-                        value: "\(mealStore.totalFat)g"
+                        consumed: mealStore.totalFat(on: Date()),
+                        target: profileStore.profile.fatGoal,
+                        unit: "g"
                     )
-                }
-                .padding(.horizontal)
-
-                if mealStore.foods.isEmpty {
-
-                    Spacer()
-
-                    Image(systemName: "fork.knife.circle")
-                        .font(.system(size: 70))
-                        .foregroundStyle(Color.trainBlue)
-
-                    Text("No Meals Yet")
-                        .font(.title2.bold())
 
                     Text(
-                        "Add your first meal to start tracking today's nutrition."
+                        profileStore.profile.hasValidPersonalDetails
+                        ? "Targets are estimates based on your profile, not medical advice."
+                        : "Default targets shown. Add your age, height and weight in Edit Training Plan for personalized estimates."
                     )
-                    .multilineTextAlignment(.center)
-                    .foregroundStyle(Color.secondary)
-                    .padding(.horizontal, 35)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .padding(.horizontal)
 
-                    Spacer()
+
+               if todayMeals.isEmpty {
+
+                    // Scrolls like the meal list so the screen never overflows.
+                    ScrollView {
+
+                        VStack(spacing: 12) {
+
+                            Image(systemName: "fork.knife.circle")
+                                .font(.system(size: 70))
+                                .foregroundStyle(Color.trainBlue)
+
+                            Text("No Meals Yet")
+                                .font(.title2.bold())
+
+                            Text(
+                                "Add your first meal to start tracking today's nutrition."
+                            )
+                            .multilineTextAlignment(.center)
+                            .foregroundStyle(Color.secondary)
+                            .padding(.horizontal, 35)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 24)
+                    }
 
                 } else {
 
@@ -1466,7 +2415,7 @@ struct NutritionView: View {
 
                         Section("Today's Meals") {
 
-                            ForEach(mealStore.foods) { food in
+                            ForEach(todayMeals) { food in
 
                                 VStack(alignment: .leading, spacing: 8) {
 
@@ -1494,7 +2443,17 @@ struct NutritionView: View {
                                 .padding(.vertical, 4)
                             }
                             .onDelete { offsets in
-                                mealStore.deleteMeals(at: offsets)
+                                let selectedMeals = offsets.map { todayMeals[$0] }
+
+                                let allIndices = IndexSet(
+                                    selectedMeals.compactMap { selectedMeal in
+                                        mealStore.foods.firstIndex {
+                                            $0.id == selectedMeal.id
+                                        }
+                                    }
+                                )
+
+                                mealStore.deleteMeals(at: allIndices)
                             }
                         }
                     }
@@ -1678,7 +2637,7 @@ struct ProgressScreen: View {
 
         return Int(
             min(
-                Double(mealStore.totalCalories)
+                Double(mealStore.totalCalories(on: Date()))
                 / Double(profileStore.profile.calorieGoal),
                 1
             ) * 100
@@ -1693,7 +2652,7 @@ struct ProgressScreen: View {
 
         return Int(
             min(
-                Double(mealStore.totalProtein)
+                Double(mealStore.totalProtein(on: Date()))
                 / Double(profileStore.profile.proteinGoal),
                 1
             ) * 100
@@ -1727,7 +2686,7 @@ struct ProgressScreen: View {
 
                         ProgressCard(
                             title: "Meals",
-                            value: "\(mealStore.foods.count)"
+                            value: "\(mealStore.meals(on: Date()).count)"
                         )
 
                         ProgressCard(
@@ -1778,7 +2737,7 @@ struct ProgressScreen: View {
                         SummaryRow(
                             title: "Calories",
                             value:
-                                "\(mealStore.totalCalories) / \(profileStore.profile.calorieGoal)"
+                                "\(mealStore.totalCalories(on: Date())) / \(profileStore.profile.calorieGoal)"
                         )
 
                         Divider()
@@ -1786,21 +2745,21 @@ struct ProgressScreen: View {
                         SummaryRow(
                             title: "Protein",
                             value:
-                                "\(mealStore.totalProtein)g / \(profileStore.profile.proteinGoal)g"
+                                "\(mealStore.totalProtein(on: Date()))g / \(profileStore.profile.proteinGoal)g"
                         )
 
                         Divider()
 
                         SummaryRow(
                             title: "Carbs",
-                            value: "\(mealStore.totalCarbs)g"
+                            value: "\(mealStore.totalCarbs(on: Date()))g"
                         )
 
                         Divider()
 
                         SummaryRow(
                             title: "Fat",
-                            value: "\(mealStore.totalFat)g"
+                            value: "\(mealStore.totalFat(on: Date()))g"
                         )
                     }
                     .padding(20)
@@ -2015,6 +2974,19 @@ struct EditProfileView: View {
     @State private var trainingDays: Int
     @State private var calorieGoal: Int
     @State private var proteinGoal: Int
+    
+    @State private var age: Int
+    @State private var heightCm: Double
+    @State private var weightKg: Double
+    @State private var activityLevel: String
+    @State private var metabolicEquationSex: String
+    @State private var validationError: String?
+    
+    @State private var measurementUnits: String
+    @State private var heightFeet: Int
+    @State private var heightInches: Int
+    @State private var weightPounds: Double
+
 
     let sports = [
         "Weight Training",
@@ -2056,6 +3028,29 @@ struct EditProfileView: View {
         _proteinGoal = State(
             initialValue: profileStore.profile.proteinGoal
         )
+        
+        // Profiles without an age store 0; start the stepper at its minimum.
+        _age = State(initialValue: max(18, profileStore.profile.age))
+        _heightCm = State(initialValue: profileStore.profile.heightCm)
+        _weightKg = State(initialValue: profileStore.profile.weightKg)
+        _activityLevel = State(
+            initialValue: profileStore.profile.activityLevel
+        )
+        _metabolicEquationSex = State(
+            initialValue: profileStore.profile.metabolicEquationSex
+        )
+        _measurementUnits = State(
+            initialValue: profileStore.profile.measurementUnits
+        )
+
+        let totalInches = profileStore.profile.heightCm / 2.54
+        _heightFeet = State(initialValue: Int(totalInches) / 12)
+        _heightInches = State(initialValue: Int(totalInches) % 12)
+
+        _weightPounds = State(
+            initialValue: profileStore.profile.weightKg * 2.20462
+        )
+
     }
 
     var body: some View {
@@ -2063,6 +3058,111 @@ struct EditProfileView: View {
         NavigationStack {
 
             Form {
+                if let validationError = validationError {
+                    Section {
+                        Text(validationError)
+                            .foregroundStyle(.red)
+                    }
+                }
+                
+                Section("Personal Details") {
+                    Picker(
+                        "Units",
+                        selection: Binding(
+                            get: { measurementUnits },
+                            set: { changeUnits(to: $0) }
+                        )
+                    ) {
+                        Text("Metric (cm, kg)").tag("Metric")
+                        Text("Imperial (ft, lb)").tag("Imperial")
+                    }
+                    Stepper("Age: \(age)", value: $age, in: 18...100)
+
+                    if measurementUnits == "Metric" {
+                        HStack {
+                            Text("Height (cm)")
+                            Spacer()
+                            TextField(
+                                "Height",
+                                value: $heightCm,
+                                format: .number.precision(.fractionLength(1))
+                            )
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                            .frame(width: 100)
+                        }
+
+                        HStack {
+                            Text("Weight (kg)")
+                            Spacer()
+                            TextField(
+                                "Weight",
+                                value: $weightKg,
+                                format: .number.precision(.fractionLength(1))
+                            )
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                            .frame(width: 100)
+                        }
+                    } else {
+                        HStack {
+                            Text("Height")
+                            Spacer()
+
+                            Picker("Feet", selection: $heightFeet) {
+                                ForEach(3...8, id: \.self) { feet in
+                                    Text("\(feet) ft").tag(feet)
+                                }
+                            }
+                            .labelsHidden()
+
+                            Picker("Inches", selection: $heightInches) {
+                                ForEach(0...11, id: \.self) { inches in
+                                    Text("\(inches) in").tag(inches)
+                                }
+                            }
+                            .labelsHidden()
+                        }
+
+                        HStack {
+                            Text("Weight (lb)")
+                            Spacer()
+                            TextField(
+                                "Weight",
+                                value: $weightPounds,
+                                format: .number.precision(.fractionLength(1))
+                            )
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                            .frame(width: 100)
+                        }
+                    }
+
+                    Picker("Activity Level", selection: $activityLevel) {
+                        Text("Sedentary").tag("Sedentary")
+                        Text("Lightly Active").tag("Lightly Active")
+                        Text("Moderately Active").tag("Moderately Active")
+                        Text("Very Active").tag("Very Active")
+                        Text("Extra Active").tag("Extra Active")
+                    }
+
+                    Picker(
+                        "Equation Setting",
+                        selection: $metabolicEquationSex
+                    ) {
+                        Text("Male").tag("Male")
+                        Text("Female").tag("Female")
+                        Text("Prefer not to say").tag("Prefer not to say")
+                    }
+
+                    Text(
+                        "The equation setting is used to estimate energy needs. " +
+                        "These calculations are estimates, not medical advice."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+
 
                 Section("Training") {
 
@@ -2096,14 +3196,14 @@ struct EditProfileView: View {
                     Stepper(
                         "\(calorieGoal) calories",
                         value: $calorieGoal,
-                        in: 1200...5000,
+                        in: 1200...8000,
                         step: 100
                     )
 
                     Stepper(
                         "\(proteinGoal)g protein",
                         value: $proteinGoal,
-                        in: 50...300,
+                        in: 50...500,
                         step: 5
                     )
                 }
@@ -2132,15 +3232,102 @@ struct EditProfileView: View {
 
     private func save() {
 
-        profileStore.profile = FitnessProfile(
+        // Imperial inputs are only converted when switching units,
+        // so convert them here before validating and saving.
+        if measurementUnits == "Imperial" {
+            let totalInches = heightFeet * 12 + heightInches
+
+            // Keep the original cm value if the height wasn't changed,
+            // avoiding rounding loss from whole inches.
+            if totalInches != Int(heightCm / 2.54) {
+                heightCm = Double(totalInches) * 2.54
+            }
+
+            weightKg = weightPounds / 2.20462
+        }
+
+        guard (18...100).contains(age) else {
+            validationError = "Age must be between 18 and 100."
+            return
+        }
+
+        guard heightCm.isFinite,
+              (100...250).contains(heightCm) else {
+            validationError = "Height must be between 100 and 250 cm."
+            return
+        }
+
+        guard weightKg.isFinite, (30...350).contains(weightKg) else {
+            validationError = "Weight must be between 30 and 350 kg."
+            return
+        }
+
+        validationError = nil
+
+        var updatedProfile = FitnessProfile(
             sport: sport,
             goal: goal,
             trainingDays: trainingDays,
             calorieGoal: calorieGoal,
-            proteinGoal: proteinGoal
+            proteinGoal: proteinGoal,
+            carbsGoal: profileStore.profile.carbsGoal,
+            fatGoal: profileStore.profile.fatGoal,
+            age: age,
+            heightCm: heightCm,
+            weightKg: weightKg,
+            activityLevel: activityLevel,
+            metabolicEquationSex: metabolicEquationSex,
+            measurementUnits: measurementUnits
         )
 
+        // Recalculate targets only when a calculation input changed,
+        // so manual calorie/protein adjustments are otherwise kept.
+        let current = profileStore.profile
+        let inputsChanged =
+            age != current.age ||
+            abs(heightCm - current.heightCm) > 0.05 ||
+            abs(weightKg - current.weightKg) > 0.05 ||
+            activityLevel != current.activityLevel ||
+            metabolicEquationSex != current.metabolicEquationSex ||
+            goal != current.goal
+
+        if inputsChanged,
+           let targets = NutritionCalculator.calculate(
+               profile: updatedProfile
+           ) {
+            updatedProfile.calorieGoal = targets.calories
+            updatedProfile.proteinGoal = targets.protein
+            updatedProfile.carbsGoal = targets.carbs
+            updatedProfile.fatGoal = targets.fat
+        } else if calorieGoal != current.calorieGoal ||
+                    proteinGoal != current.proteinGoal {
+            // Manual calorie/protein change: keep carbs and fat consistent.
+            let macros = NutritionCalculator.carbsAndFat(
+                calories: calorieGoal,
+                protein: proteinGoal
+            )
+            updatedProfile.carbsGoal = macros.carbs
+            updatedProfile.fatGoal = macros.fat
+        }
+
+        profileStore.profile = updatedProfile
+
         dismiss()
+    }
+    private func changeUnits(to newUnits: String) {
+        guard newUnits != measurementUnits else { return }
+
+        if newUnits == "Imperial" {
+            let totalInches = heightCm / 2.54
+            heightFeet = Int(totalInches) / 12
+            heightInches = Int(totalInches) % 12
+            weightPounds = weightKg * 2.20462
+        } else {
+            heightCm = Double(heightFeet * 12 + heightInches) * 2.54
+            weightKg = weightPounds / 2.20462
+        }
+
+        measurementUnits = newUnits
     }
 }
 
