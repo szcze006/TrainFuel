@@ -1674,6 +1674,8 @@ struct SignUpView: View {
 
     @Binding var user: User?
 
+    @State private var showBarcodeScanner = false
+
     @State private var name = ""
     @State private var email = ""
     @State private var password = ""
@@ -2825,6 +2827,11 @@ struct NutritionView: View {
     @ObservedObject var profileStore: ProfileStore
 
     @State private var showAddMeal = false
+    private var macroCalories: (protein: Int, carbs: Int, fat: Int) {
+        (mealStore.totalProtein(on: Date()) * 4,
+         mealStore.totalCarbs(on: Date()) * 4,
+         mealStore.totalFat(on: Date()) * 9)
+    }
     private var todayMeals: [FoodEntry] {
         mealStore.meals(on: Date())
     }
@@ -2865,6 +2872,20 @@ struct NutritionView: View {
                         target: profileStore.profile.fatGoal,
                         unit: "g"
                     )
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Where today's calories come from").font(.headline)
+                        HStack {
+                            Label("Protein: \\(macroCalories.protein) kcal", systemImage: "circle.fill")
+                            Spacer()
+                            Text("Carbs: \\(macroCalories.carbs) kcal")
+                        }.font(.caption)
+                        Text("Fat: \\(macroCalories.fat) kcal").font(.caption)
+                        Text("Calculated from macros (4/4/9 kcal per gram); labels may differ.")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                    .padding().frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.white, in: RoundedRectangle(cornerRadius: 14))
 
                     Text(
                         profileStore.profile.hasValidPersonalDetails
@@ -3039,6 +3060,9 @@ struct AddMealView: View {
             Form {
 
                 MealScanSection(onEstimate: applyEstimate)
+                Section("Barcode lookup") {
+                    Button("Scan packaged food barcode") { showBarcodeScanner = true }
+                }
 
                 Section("Meal Information") {
 
@@ -3077,6 +3101,22 @@ struct AddMealView: View {
                         }
                     }
                     .disabled(!formIsValid)
+                }
+            }
+            .sheet(isPresented: $showBarcodeScanner) {
+                NavigationStack {
+                    TrainFuelBarcodeEntry { food, grams in
+                        let n = food.nutrients(forGrams: grams)
+                        name = food.name
+                        calories = String(Int(n.calories.rounded()))
+                        protein = String(Int(n.protein.rounded()))
+                        carbs = String(Int(n.carbs.rounded()))
+                        fat = String(Int(n.fat.rounded()))
+                        showBarcodeScanner = false
+                    }
+                    .toolbar { ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { showBarcodeScanner = false }
+                    } }
                 }
             }
             .navigationTitle("Add Meal")
