@@ -142,10 +142,10 @@ struct PerformanceHubView: View {
                 metric("Weekly workouts", value: currentWeekWorkouts.count, goal: max(1, profileStore.profile.trainingDays), unit: "sessions")
                 HStack {
                     insightCard("Minutes this week", "\(weekMinutes)")
-                    insightCard("Meals loaded", "\(mealStore.foods.count)")
+                    insightCard("Meals logged", mealStore.totalMealCount.map { "\($0)" } ?? "—")
                 }
-                metric("Calories logged", value: mealStore.totalCalories, goal: max(1, profileStore.profile.calorieGoal), unit: "kcal")
-                metric("Protein logged", value: mealStore.totalProtein, goal: max(1, profileStore.profile.proteinGoal), unit: "g")
+                metric("Calories today", value: mealStore.totalCalories(on: Date()), goal: max(1, profileStore.profile.calorieGoal), unit: "kcal")
+                metric("Protein today", value: mealStore.totalProtein(on: Date()), goal: max(1, profileStore.profile.proteinGoal), unit: "g")
                 metric("Water today", value: todayWater, goal: waterGoal, unit: "mL")
                 Text("Recent workout activity").font(.headline)
                 ForEach(Array(workoutStore.workouts.sorted { $0.date > $1.date }.prefix(7))) { workout in
@@ -158,7 +158,7 @@ struct PerformanceHubView: View {
                         Text("\(workout.duration) min").foregroundStyle(.secondary)
                     }
                 }
-                Text("Nutrition figures reflect meals currently loaded by the existing meal store, not a verified seven-day trend. Water is stored locally.")
+                Text("Calories and protein count today's meals. Water is stored locally.")
                     .font(.caption).foregroundStyle(.secondary)
             }.padding()
         }
@@ -222,6 +222,10 @@ struct TrainingCalendarView: View {
                 .foregroundStyle(.secondary)
             DatePicker("View day", selection: $selectedDay, displayedComponents: .date)
                 .datePickerStyle(.graphical)
+            if mealStore.isLoadingMeals(on: selectedDay) || workoutStore.isLoadingWorkouts(on: selectedDay) {
+                ProgressView("Loading this day...")
+                    .frame(maxWidth: .infinity)
+            }
             let calendar = Calendar.current
             let weekday = (calendar.component(.weekday, from: selectedDay) + 5) % 7
             if weekday < plan.count {
@@ -257,8 +261,14 @@ struct TrainingCalendarView: View {
             Text("Notes for \(selectedDay.formatted(.dateTime.month(.abbreviated).day()))").font(.headline)
             TextEditor(text: dayNote).frame(height: 90)
                 .overlay(RoundedRectangle(cornerRadius: 10).stroke(.gray.opacity(0.3)))
+                .disabled(noteStore.isLoadingNote(for: selectedDay))
             Text("This calendar maps your weekly plan to Monday onward. It does not create calendar events or reschedule sessions automatically.")
                 .font(.caption).foregroundStyle(.secondary)
+        }
+        .task(id: selectedDay) {
+            mealStore.loadMeals(on: selectedDay)
+            workoutStore.loadWorkouts(on: selectedDay)
+            noteStore.loadNote(for: selectedDay)
         }
     }
 }
