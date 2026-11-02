@@ -214,6 +214,10 @@ struct TrainingCalendarView: View {
                 .foregroundStyle(.secondary)
             DatePicker("View day", selection: $selectedDay, displayedComponents: .date)
                 .datePickerStyle(.graphical)
+            Sprint4MealCalendar(mealStore: mealStore, selectedDay: $selectedDay)
+                .onChange(of: Calendar.current.dateInterval(of: .month, for: selectedDay)?.start) { _, newMonth in
+                    if let newMonth { mealStore.loadMonthMeals(for: newMonth) }
+                }
             if mealStore.isLoadingMeals(on: selectedDay)
                 || workoutStore.isLoadingWorkouts(on: selectedDay)
                 || dailyLogStore.isLoadingLog(for: selectedDay) {
@@ -265,6 +269,7 @@ struct TrainingCalendarView: View {
                 .font(.caption).foregroundStyle(.secondary)
         }
         .task(id: selectedDay) {
+            mealStore.loadMonthMeals(for: selectedDay)
             mealStore.loadMeals(on: selectedDay)
             workoutStore.loadWorkouts(on: selectedDay)
             noteStore.loadNote(for: selectedDay)
