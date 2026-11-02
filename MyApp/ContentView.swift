@@ -3038,6 +3038,8 @@ struct AddMealView: View {
 
             Form {
 
+                MealScanSection(onEstimate: applyEstimate)
+
                 Section("Meal Information") {
 
                     TextField("Food or meal name", text: $name)
@@ -3089,6 +3091,15 @@ struct AddMealView: View {
                 }
             }
         }
+    }
+
+    private func applyEstimate(_ estimate: MealEstimate) {
+
+        name = estimate.name
+        calories = String(estimate.calories)
+        protein = String(estimate.protein)
+        carbs = String(estimate.carbs)
+        fat = String(estimate.fat)
     }
 
     private func addFood() {
