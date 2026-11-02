@@ -51,30 +51,47 @@ struct FoodEntry: Identifiable, Codable {
 
 final class MealStore: ObservableObject {
     
+    // Holds the last 30 days plus any older days opened in the calendar
     @Published var foods: [FoodEntry] = []
-    
+
+    // Stays nil until Firestore answers, which needs a connection
+    @Published var totalMealCount: Int?
+
+    @Published private var daysLoading: Set<Date> = []
+
     private let db = Firestore.firestore()
-    
+    private var recentMealsListener: ListenerRegistration?
+    private var loadedDays: Set<Date> = []
+
+    private let recentMealsStart = Calendar.current.date(
+        byAdding: .day,
+        value: -30,
+        to: Calendar.current.startOfDay(for: Date())
+    ) ?? .distantPast
+
     init() {
-        loadMealsFromFirebase()
+        listenForRecentMeals()
+        loadTotalMealCount()
     }
-    
-    var totalCalories: Int {
-        foods.reduce(0) { $0 + $1.calories }
+
+    deinit {
+        recentMealsListener?.remove()
     }
-    
-    var totalProtein: Int {
-        foods.reduce(0) { $0 + $1.protein }
+
+    private var mealsCollection: CollectionReference? {
+        guard let uid = Auth.auth().currentUser?.uid else {
+            return nil
+        }
+
+        return db.collection("users")
+            .document(uid)
+            .collection("meals")
     }
-    
-    var totalCarbs: Int {
-        foods.reduce(0) { $0 + $1.carbs }
+
+    func isLoadingMeals(on date: Date) -> Bool {
+        daysLoading.contains(Calendar.current.startOfDay(for: date))
     }
-    
-    var totalFat: Int {
-        foods.reduce(0) { $0 + $1.fat }
-    }
-    
+
     func meals(on date: Date) -> [FoodEntry] {
         foods.filter {
             Calendar.current.isDate($0.date, inSameDayAs: date)
@@ -110,7 +127,9 @@ final class MealStore: ObservableObject {
             print("No logged-in user.")
             return
         }
-        
+
+        totalMealCount? += 1
+
         // Data that will be stored in Firestore
         let mealData: [String: Any] = [
             "name": meal.name,
@@ -163,71 +182,150 @@ final class MealStore: ObservableObject {
         }
         
         foods.remove(atOffsets: offsets)
+        totalMealCount? -= offsets.count
     }
-    
+
     // MARK: - Load Meals
-    
-    
-    private func loadMealsFromFirebase() {
-        
-        guard let uid = Auth.auth().currentUser?.uid else {
+
+
+    // Shows saved meals straight away, then updates from the server
+    private func listenForRecentMeals() {
+
+        guard let mealsCollection = mealsCollection else {
             print("No logged-in user.")
             return
         }
-        
-        db.collection("users")
-            .document(uid)
-            .collection("meals")
-            .getDocuments { snapshot, error in
-                
+
+        recentMealsListener = mealsCollection
+            .whereField(
+                "date",
+                isGreaterThanOrEqualTo: Timestamp(date: recentMealsStart)
+            )
+            .addSnapshotListener { [weak self] snapshot, error in
+
                 if let error = error {
                     print("Error loading meals: \(error.localizedDescription)")
                     return
                 }
-                
-                guard let documents = snapshot?.documents else {
+
+                guard let self = self, let documents = snapshot?.documents else {
                     return
                 }
-                
-                let loadedMeals = documents.compactMap { document -> FoodEntry? in
-                    
-                    let data = document.data()
-                    
-                    guard
-                        let name = data["name"] as? String,
-                        let calories = data["calories"] as? Int,
-                        let protein = data["protein"] as? Int,
-                        let carbs = data["carbs"] as? Int,
-                        let fat = data["fat"] as? Int
-                    else {
-                        return nil
-                    }
-                    
-                    // Read the saved date from Firebase.
-                    let mealDate: Date
-                    
-                    if let timestamp = data["date"] as? Timestamp {
-                        mealDate = timestamp.dateValue()
-                    } else {
-                        // Don't count older records with missing dates as today's meals.
-                        mealDate = .distantPast
-                    }
-    
-                    return FoodEntry(
-                        id: UUID(uuidString: document.documentID) ?? UUID(),
-                        name: name,
-                        calories: calories,
-                        protein: protein,
-                        carbs: carbs,
-                        fat: fat,
-                        date: mealDate
-                    )
-                }
-                
+
+                let recentMeals = documents.compactMap { Self.meal(from: $0) }
+
                 DispatchQueue.main.async {
-                    self.foods = loadedMeals
+                    // Keep older days already opened in the calendar
+                    let olderMeals = self.foods.filter {
+                        $0.date < self.recentMealsStart
+                    }
+
+                    self.foods = recentMeals + olderMeals
                 }
             }
+    }
+
+    // Fetches one day older than the last 30 days, for the calendar
+    func loadMeals(on date: Date) {
+
+        let dayStart = Calendar.current.startOfDay(for: date)
+
+        guard
+            dayStart < recentMealsStart,
+            !loadedDays.contains(dayStart),
+            !daysLoading.contains(dayStart),
+            let dayEnd = Calendar.current.date(byAdding: .day, value: 1, to: dayStart),
+            let mealsCollection = mealsCollection
+        else {
+            return
+        }
+
+        daysLoading.insert(dayStart)
+
+        mealsCollection
+            .whereField("date", isGreaterThanOrEqualTo: Timestamp(date: dayStart))
+            .whereField("date", isLessThan: Timestamp(date: dayEnd))
+            .getDocuments { [weak self] snapshot, error in
+
+                guard let self = self else {
+                    return
+                }
+
+                if let error = error {
+                    print("Error loading meals: \(error.localizedDescription)")
+                }
+
+                let dayMeals = snapshot?.documents.compactMap { Self.meal(from: $0) }
+
+                DispatchQueue.main.async {
+                    self.daysLoading.remove(dayStart)
+
+                    guard let dayMeals = dayMeals else {
+                        return
+                    }
+
+                    let existingIDs = Set(self.foods.map { $0.id })
+                    self.foods += dayMeals.filter { !existingIDs.contains($0.id) }
+                    self.loadedDays.insert(dayStart)
+                }
+            }
+    }
+
+    // Counts on the server so meals don't have to be downloaded
+    private func loadTotalMealCount() {
+
+        guard let mealsCollection = mealsCollection else {
+            return
+        }
+
+        mealsCollection.count.getAggregation(source: .server) { [weak self] snapshot, error in
+
+            if let error = error {
+                print("Error counting meals: \(error.localizedDescription)")
+                return
+            }
+
+            let count = snapshot?.count.intValue
+
+            DispatchQueue.main.async {
+                self?.totalMealCount = count
+            }
+        }
+    }
+
+    private static func meal(from document: QueryDocumentSnapshot) -> FoodEntry? {
+
+        let data = document.data()
+
+        guard
+            let name = data["name"] as? String,
+            let calories = data["calories"] as? Int,
+            let protein = data["protein"] as? Int,
+            let carbs = data["carbs"] as? Int,
+            let fat = data["fat"] as? Int
+        else {
+            return nil
+        }
+
+        // Read the saved date from Firebase.
+        let mealDate: Date
+
+        if let timestamp = data["date"] as? Timestamp {
+            mealDate = timestamp.dateValue()
+        } else {
+            // Don't count older records with missing dates as today's meals.
+            mealDate = .distantPast
+        }
+
+        return FoodEntry(
+            id: UUID(uuidString: document.documentID) ?? UUID(),
+            name: name,
+            calories: calories,
+            protein: protein,
+            carbs: carbs,
+            fat: fat,
+            date: mealDate
+        )
     }
 }
 // MARK: - WORKOUT MODEL
@@ -243,12 +341,41 @@ struct WorkoutEntry: Identifiable, Codable {
 
 final class WorkoutStore: ObservableObject {
 
+    private static let pageSize = 50
+
+    // Holds the newest workouts plus any older days opened in the calendar
     @Published var workouts: [WorkoutEntry] = []
+    @Published private(set) var hasMoreWorkouts = false
+    @Published private(set) var isLoadingMoreWorkouts = false
+
+    @Published private var daysLoading: Set<Date> = []
 
     private let db = Firestore.firestore()
+    private var recentWorkoutsListener: ListenerRegistration?
+    private var workoutLimit = WorkoutStore.pageSize
+    private var oldestListedDate: Date?
+    private var loadedDays: Set<Date> = []
 
     init() {
-        loadWorkoutsFromFirebase()
+        listenForRecentWorkouts()
+    }
+
+    deinit {
+        recentWorkoutsListener?.remove()
+    }
+
+    private var workoutsCollection: CollectionReference? {
+        guard let uid = Auth.auth().currentUser?.uid else {
+            return nil
+        }
+
+        return db.collection("users")
+            .document(uid)
+            .collection("workouts")
+    }
+
+    func isLoadingWorkouts(on date: Date) -> Bool {
+        daysLoading.contains(Calendar.current.startOfDay(for: date))
     }
 
     // MARK: - Add Workout
@@ -330,64 +457,149 @@ final class WorkoutStore: ObservableObject {
 
     // MARK: - Load Workouts
 
-    private func loadWorkoutsFromFirebase() {
+    // Shows saved workouts straight away, then updates from the server
+    private func listenForRecentWorkouts() {
 
-        guard let uid = Auth.auth().currentUser?.uid else {
+        guard let workoutsCollection = workoutsCollection else {
             print("No logged-in user.")
             return
         }
 
-        db.collection("users")
-            .document(uid)
-            .collection("workouts")
-            .getDocuments { snapshot, error in
+        recentWorkoutsListener?.remove()
+
+        recentWorkoutsListener = workoutsCollection
+            .order(by: "date", descending: true)
+            .limit(to: workoutLimit)
+            .addSnapshotListener { [weak self] snapshot, error in
+
+                guard let self = self else {
+                    return
+                }
 
                 if let error = error {
                     print(
                         "Error loading workouts: \(error.localizedDescription)"
                     )
-                    return
                 }
 
                 guard let documents = snapshot?.documents else {
+                    DispatchQueue.main.async {
+                        self.isLoadingMoreWorkouts = false
+                    }
                     return
                 }
 
-                let loadedWorkouts = documents.compactMap {
-                    document -> WorkoutEntry? in
+                let recentWorkouts = documents.compactMap {
+                    Self.workout(from: $0)
+                }
+                let oldestRecentDate = recentWorkouts.last?.date
+                let isFullPage = documents.count == self.workoutLimit
 
-                    let data = document.data()
-
-                    guard
-                        let name = data["name"] as? String,
-                        let type = data["type"] as? String,
-                        let duration = data["duration"] as? Int,
-                        let timestamp =
-                            data["date"]
-                            as? FirebaseFirestore.Timestamp
-                    else {
-                        return nil
+                DispatchQueue.main.async {
+                    // Keep older days already opened in the calendar
+                    let olderWorkouts = self.workouts.filter {
+                        $0.date < oldestRecentDate ?? .distantPast
                     }
 
-                    return WorkoutEntry(
-                        id: UUID(
-                            uuidString: document.documentID
-                        ) ?? UUID(),
-                        name: name,
-                        type: type,
-                        duration: duration,
-                        date: timestamp.dateValue()
+                    self.workouts = recentWorkouts + olderWorkouts
+                    self.oldestListedDate = oldestRecentDate
+                    self.hasMoreWorkouts = isFullPage
+                    self.isLoadingMoreWorkouts = false
+                }
+            }
+    }
+
+    func loadMoreWorkouts() {
+
+        guard hasMoreWorkouts, !isLoadingMoreWorkouts else {
+            return
+        }
+
+        isLoadingMoreWorkouts = true
+        workoutLimit += Self.pageSize
+        listenForRecentWorkouts()
+    }
+
+    // Fetches one day older than the listed workouts, for the calendar
+    func loadWorkouts(on date: Date) {
+
+        let dayStart = Calendar.current.startOfDay(for: date)
+
+        guard
+            hasMoreWorkouts,
+            let oldestListedDate = oldestListedDate,
+            dayStart < oldestListedDate,
+            !loadedDays.contains(dayStart),
+            !daysLoading.contains(dayStart),
+            let dayEnd = Calendar.current.date(byAdding: .day, value: 1, to: dayStart),
+            let workoutsCollection = workoutsCollection
+        else {
+            return
+        }
+
+        daysLoading.insert(dayStart)
+
+        workoutsCollection
+            .whereField("date", isGreaterThanOrEqualTo: Timestamp(date: dayStart))
+            .whereField("date", isLessThan: Timestamp(date: dayEnd))
+            .getDocuments { [weak self] snapshot, error in
+
+                guard let self = self else {
+                    return
+                }
+
+                if let error = error {
+                    print(
+                        "Error loading workouts: \(error.localizedDescription)"
                     )
+                }
+
+                let dayWorkouts = snapshot?.documents.compactMap {
+                    Self.workout(from: $0)
                 }
 
                 DispatchQueue.main.async {
-                    self.workouts = loadedWorkouts
+                    self.daysLoading.remove(dayStart)
 
-                    print(
-                        "Workouts successfully loaded from Firestore."
-                    )
+                    guard let dayWorkouts = dayWorkouts else {
+                        return
+                    }
+
+                    let existingIDs = Set(self.workouts.map { $0.id })
+                    self.workouts += dayWorkouts.filter {
+                        !existingIDs.contains($0.id)
+                    }
+                    self.loadedDays.insert(dayStart)
                 }
             }
+    }
+
+    private static func workout(
+        from document: QueryDocumentSnapshot
+    ) -> WorkoutEntry? {
+
+        let data = document.data()
+
+        guard
+            let name = data["name"] as? String,
+            let type = data["type"] as? String,
+            let duration = data["duration"] as? Int,
+            let timestamp =
+                data["date"]
+                as? FirebaseFirestore.Timestamp
+        else {
+            return nil
+        }
+
+        return WorkoutEntry(
+            id: UUID(
+                uuidString: document.documentID
+            ) ?? UUID(),
+            name: name,
+            type: type,
+            duration: duration,
+            date: timestamp.dateValue()
+        )
     }
 }
 
@@ -399,14 +611,15 @@ final class NoteStore: ObservableObject {
 
     // Keyed by "yyyy-MM-dd", one note per day
     @Published var notes: [String: String] = [:]
+    @Published private var noteKeysLoading: Set<String> = []
 
     private let db = Firestore.firestore()
     private var pendingSaves: [String: DispatchWorkItem] = [:]
+    private var loadedNoteKeys: Set<String> = []
 
     init() {
         // Old single note shared by every day; no longer used
         UserDefaults.standard.removeObject(forKey: "sprint3.calendar.notes")
-        loadNotesFromFirebase()
     }
 
     static func dateKey(_ date: Date) -> String {
@@ -417,6 +630,10 @@ final class NoteStore: ObservableObject {
 
     func note(for day: Date) -> String {
         notes[Self.dateKey(day)] ?? ""
+    }
+
+    func isLoadingNote(for day: Date) -> Bool {
+        noteKeysLoading.contains(Self.dateKey(day))
     }
 
     // MARK: - Save Note
@@ -473,41 +690,51 @@ final class NoteStore: ObservableObject {
 
     // MARK: - Load Notes
 
-    private func loadNotesFromFirebase() {
+    // Notes are only shown in the calendar, so fetch the selected day
+    func loadNote(for day: Date) {
 
-        guard let uid = Auth.auth().currentUser?.uid else {
-            print("No logged-in user.")
+        let key = Self.dateKey(day)
+
+        guard
+            !loadedNoteKeys.contains(key),
+            !noteKeysLoading.contains(key),
+            let uid = Auth.auth().currentUser?.uid
+        else {
             return
         }
+
+        noteKeysLoading.insert(key)
 
         db.collection("users")
             .document(uid)
             .collection("trainingNotes")
-            .getDocuments { snapshot, error in
+            .document(key)
+            .getDocument { [weak self] document, error in
 
                 if let error = error {
                     print(
-                        "Error loading notes: \(error.localizedDescription)"
+                        "Error loading note: \(error.localizedDescription)"
                     )
-                    return
                 }
 
-                guard let documents = snapshot?.documents else {
-                    return
-                }
-
-                var loadedNotes: [String: String] = [:]
-                for document in documents {
-                    if let text = document.data()["text"] as? String {
-                        loadedNotes[document.documentID] = text
-                    }
-                }
+                let didLoad = error == nil
+                let text = document?.data()?["text"] as? String
 
                 DispatchQueue.main.async {
-                    // Keep anything typed before the load finished
-                    self.notes = loadedNotes.merging(self.notes) { _, local in local }
+                    guard let self = self else {
+                        return
+                    }
 
-                    print("Notes successfully loaded from Firestore.")
+                    self.noteKeysLoading.remove(key)
+
+                    if didLoad {
+                        self.loadedNoteKeys.insert(key)
+                    }
+
+                    // Keep anything typed before the load finished
+                    if self.notes[key] == nil {
+                        self.notes[key] = text
+                    }
                 }
             }
     }
@@ -688,6 +915,8 @@ final class ProfileStore: ObservableObject {
             saveProfileToFirebase()
         }
     }
+    @Published private(set) var hasLoadedProfile = false
+
     func updateNutritionTargets() {
         guard let targets = NutritionCalculator.calculate(
             profile: profile
@@ -772,6 +1001,7 @@ final class ProfileStore: ObservableObject {
 
         guard let profileReference = profileReference else {
             print("No logged-in user. Cannot load profile.")
+            hasLoadedProfile = true
             return
         }
 
@@ -781,6 +1011,9 @@ final class ProfileStore: ObservableObject {
                 print(
                     "Error loading profile: \(error.localizedDescription)"
                 )
+                DispatchQueue.main.async {
+                    self.hasLoadedProfile = true
+                }
                 return
             }
 
@@ -790,6 +1023,9 @@ final class ProfileStore: ObservableObject {
                 let data = document.data()
             else {
                 print("No profile found in Firestore.")
+                DispatchQueue.main.async {
+                    self.hasLoadedProfile = true
+                }
                 return
             }
 
@@ -814,6 +1050,7 @@ final class ProfileStore: ObservableObject {
 
             DispatchQueue.main.async {
                 self.profile = loadedProfile
+                self.hasLoadedProfile = true
                 print("Profile successfully loaded from Firestore.")
             }
         }
@@ -1515,7 +1752,12 @@ struct MainTabView: View {
 
         Group {
 
-            if profileStore.profile.isComplete {
+            if !profileStore.hasLoadedProfile {
+
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            } else if profileStore.profile.isComplete {
 
                 TabView {
 
@@ -2629,6 +2871,12 @@ struct ProgressScreen: View {
     @ObservedObject var profileStore: ProfileStore
     @ObservedObject var workoutStore: WorkoutStore
 
+    private var currentWeekWorkouts: [WorkoutEntry] {
+        workoutStore.workouts.filter {
+            Calendar.current.isDate($0.date, equalTo: Date(), toGranularity: .weekOfYear)
+        }
+    }
+
     var calorieProgress: Int {
 
         guard profileStore.profile.calorieGoal > 0 else {
@@ -2714,15 +2962,15 @@ struct ProgressScreen: View {
                             .font(.title2.bold())
 
                         SummaryRow(
-                            title: "Workouts Completed",
-                            value: "\(workoutStore.workouts.count)"
+                            title: "Workouts This Week",
+                            value: "\(currentWeekWorkouts.count)"
                         )
 
                         Divider()
 
                         SummaryRow(
-                            title: "Total Training Time",
-                            value: "\(workoutStore.workouts.reduce(0) { $0 + $1.duration }) min"
+                            title: "Training Time This Week",
+                            value: "\(currentWeekWorkouts.reduce(0) { $0 + $1.duration }) min"
                         )
                     }
                     .padding(20)
@@ -2903,7 +3151,7 @@ struct ProfileView: View {
 
                         ProfileRow(
                             title: "Meals Logged",
-                            value: "\(mealStore.foods.count)"
+                            value: mealStore.totalMealCount.map { "\($0)" } ?? "—"
                         )
                     }
                     .background(Color.white)
@@ -3450,6 +3698,21 @@ struct FitnessView: View {
                             }) { workout in
 
                                 WorkoutRow(workout: workout)
+                            }
+
+                            if workoutStore.isLoadingMoreWorkouts {
+
+                                ProgressView()
+                                    .frame(maxWidth: .infinity)
+
+                            } else if workoutStore.hasMoreWorkouts {
+
+                                Button("Load More") {
+                                    workoutStore.loadMoreWorkouts()
+                                }
+                                .fontWeight(.semibold)
+                                .foregroundStyle(Color.trainBlue)
+                                .frame(maxWidth: .infinity)
                             }
                         }
                     }
