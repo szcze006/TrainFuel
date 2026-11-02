@@ -225,6 +225,31 @@ final class MealStore: ObservableObject {
             }
     }
 
+    // Month data is loaded only on demand when the calendar opens.
+    private var loadedMonths: Set<Date> = []
+    func loadMonthMeals(for date: Date) {
+        guard let interval = Calendar.current.dateInterval(of: .month, for: date),
+              let collection = mealsCollection else { return }
+        let month = interval.start
+        guard !loadedMonths.contains(month) else { return }
+        loadedMonths.insert(month)
+        collection.whereField("date", isGreaterThanOrEqualTo: Timestamp(date: interval.start))
+            .whereField("date", isLessThan: Timestamp(date: interval.end))
+            .getDocuments { [weak self] snapshot, error in
+                guard let self else { return }
+                if error != nil {
+                    DispatchQueue.main.async { self.loadedMonths.remove(month) }
+                    return
+                }
+                let loaded = snapshot?.documents.compactMap { Self.meal(from: $0) } ?? []
+                DispatchQueue.main.async {
+                    let ids = Set(loaded.map(\.id))
+                    self.foods.removeAll { ids.contains($0.id) }
+                    self.foods.append(contentsOf: loaded)
+                }
+            }
+    }
+
     // Fetches one day older than the last 30 days, for the calendar
     func loadMeals(on date: Date) {
 
