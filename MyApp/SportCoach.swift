@@ -70,11 +70,12 @@ struct TrainingPlanView: View {
     @ObservedObject var workoutStore: WorkoutStore
     @ObservedObject var mealStore: MealStore
     @ObservedObject var noteStore: NoteStore
-    @AppStorage("sprint3.soreness") private var soreness = 2
-    @AppStorage("sprint3.sleep") private var sleep = 8
+    @ObservedObject var dailyLogStore: DailyLogStore
     @State private var selectedSection = 0
     @State private var completedName: String? = nil
     private var sport: String { profileStore.profile.sport }
+    private var soreness: Int { dailyLogStore.todayLog.soreness ?? DailyLog.defaultSoreness }
+    private var sleep: Int { dailyLogStore.todayLog.sleepHours ?? DailyLog.defaultSleepHours }
     private var plan: [PlannedSession] { SportCoach.weeklyPlan(sport, days: profileStore.profile.trainingDays) }
     private var weekWorkouts: [WorkoutEntry] {
         let calendar = Calendar.current
@@ -98,7 +99,7 @@ struct TrainingPlanView: View {
                     if selectedSection == 0 { trainingContent }
                     else if selectedSection == 1 { fuelingContent }
                     else if selectedSection == 2 { recoveryContent }
-                    else { TrainingCalendarView(profileStore: profileStore, workoutStore: workoutStore, mealStore: mealStore, noteStore: noteStore) }
+                    else { TrainingCalendarView(profileStore: profileStore, workoutStore: workoutStore, mealStore: mealStore, noteStore: noteStore, dailyLogStore: dailyLogStore) }
                     Text("Starter recommendations for general education. Adapt exercise difficulty to your ability and seek qualified guidance for injuries or medical nutrition needs.")
                         .font(.caption).foregroundStyle(.secondary)
                 }.padding()
@@ -153,14 +154,16 @@ struct TrainingPlanView: View {
             Text("Daily Recovery Check-in").font(.title3.bold())
             VStack(alignment: .leading) {
                 Text("Muscle soreness: \(soreness)/5")
-                Slider(value: Binding(get: { Double(soreness) }, set: { soreness = Int($0) }), in: 1...5, step: 1)
+                Slider(value: Binding(get: { Double(soreness) }, set: { dailyLogStore.setSoreness(Int($0)) }), in: 1...5, step: 1)
                 Text("Sleep last night: \(sleep) hours")
-                Stepper("Hours slept", value: $sleep, in: 0...14)
-            }.padding().background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
+                Stepper("Hours slept", value: Binding(get: { sleep }, set: { dailyLogStore.setSleepHours($0) }), in: 0...14)
+            }
+            .disabled(!dailyLogStore.hasLoadedToday)
+            .padding().background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
             Label(SportCoach.recovery(sport, soreness: soreness, sleep: sleep), systemImage: "heart.text.square")
                 .padding().frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12))
-            Text("This check-in is stored on this device, not synchronized to Firebase.").font(.caption).foregroundStyle(.secondary)
+            Text("This check-in is saved to your account for today.").font(.caption).foregroundStyle(.secondary)
         }
     }
 }

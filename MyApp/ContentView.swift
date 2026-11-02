@@ -739,6 +739,245 @@ final class NoteStore: ObservableObject {
             }
     }
 }
+
+// MARK: - DAILY LOG MODEL
+
+
+// Fields stay nil until the user records them for that day
+struct DailyLog {
+    static let defaultSoreness = 2
+    static let defaultSleepHours = 8
+
+    var waterML: Int?
+    var soreness: Int?
+    var sleepHours: Int?
+
+    init(data: [String: Any] = [:]) {
+        waterML = data["waterML"] as? Int
+        soreness = data["soreness"] as? Int
+        sleepHours = data["sleepHours"] as? Int
+    }
+}
+
+
+// MARK: - DAILY LOG STORE
+
+
+final class DailyLogStore: ObservableObject {
+
+    // Keyed by "yyyy-MM-dd", one log per day
+    @Published private(set) var logs: [String: DailyLog] = [:]
+    @Published private(set) var hasLoadedToday = false
+
+    @Published private var keysLoading: Set<String> = []
+
+    private let db = Firestore.firestore()
+    private var todayListener: ListenerRegistration?
+    private var todayKey = ""
+    private var loadedKeys: Set<String> = []
+    private var pendingFields: [String: [String: Any]] = [:]
+    private var pendingSaves: [String: DispatchWorkItem] = [:]
+
+    init() {
+        // Old values stored on the device; no longer used
+        for key in [
+            "sprint3.water.date",
+            "sprint3.water.ml",
+            "sprint3.water.goal",
+            "sprint3.soreness",
+            "sprint3.sleep"
+        ] {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
+
+        refreshToday()
+    }
+
+    deinit {
+        todayListener?.remove()
+    }
+
+    private func logReference(for key: String) -> DocumentReference? {
+        guard let uid = Auth.auth().currentUser?.uid else {
+            return nil
+        }
+
+        return db.collection("users")
+            .document(uid)
+            .collection("dailyLogs")
+            .document(key)
+    }
+
+    var todayLog: DailyLog {
+        log(for: Date())
+    }
+
+    func log(for day: Date) -> DailyLog {
+        logs[NoteStore.dateKey(day)] ?? DailyLog()
+    }
+
+    func isLoadingLog(for day: Date) -> Bool {
+        keysLoading.contains(NoteStore.dateKey(day))
+    }
+
+    // MARK: - Update Today
+
+    func addWater(_ amount: Int) {
+        let waterML = max(0, (todayLog.waterML ?? 0) + amount)
+        updateToday(field: "waterML", value: waterML) { $0.waterML = waterML }
+    }
+
+    func setSoreness(_ soreness: Int) {
+        updateToday(field: "soreness", value: soreness) { $0.soreness = soreness }
+    }
+
+    func setSleepHours(_ hours: Int) {
+        updateToday(field: "sleepHours", value: hours) { $0.sleepHours = hours }
+    }
+
+    private func updateToday(
+        field: String,
+        value: Int,
+        change: (inout DailyLog) -> Void
+    ) {
+
+        refreshToday()
+
+        // Saving before the load finishes could replace the stored value
+        guard hasLoadedToday else {
+            return
+        }
+
+        let key = todayKey
+
+        // Show immediately in the app
+        var log = logs[key] ?? DailyLog()
+        change(&log)
+        logs[key] = log
+
+        pendingFields[key, default: [:]][field] = value
+
+        // Wait until tapping pauses before writing to Firestore
+        pendingSaves[key]?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.writePendingFields(key: key)
+        }
+        pendingSaves[key] = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: work)
+    }
+
+    // Called when the app leaves the screen, so a recent tap isn't lost
+    func savePendingChanges() {
+        for key in Array(pendingSaves.keys) {
+            writePendingFields(key: key)
+        }
+    }
+
+    private func writePendingFields(key: String) {
+
+        pendingSaves[key]?.cancel()
+        pendingSaves[key] = nil
+
+        guard
+            var data = pendingFields.removeValue(forKey: key),
+            let document = logReference(for: key)
+        else {
+            return
+        }
+
+        data["updatedAt"] = FirebaseFirestore.Timestamp(date: Date())
+
+        document.setData(data, merge: true) { error in
+            if let error = error {
+                print("Error saving daily log: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    // MARK: - Load Logs
+
+    // Also moves to the new day's log if the app stayed open past midnight
+    func refreshToday() {
+
+        let key = NoteStore.dateKey(Date())
+
+        guard key != todayKey, let document = logReference(for: key) else {
+            return
+        }
+
+        if !todayKey.isEmpty {
+            loadedKeys.insert(todayKey)
+        }
+
+        todayListener?.remove()
+        todayKey = key
+        hasLoadedToday = false
+
+        todayListener = document.addSnapshotListener { [weak self] snapshot, error in
+
+            if let error = error {
+                print("Error loading daily log: \(error.localizedDescription)")
+            }
+
+            let log = snapshot.map { DailyLog(data: $0.data() ?? [:]) }
+
+            DispatchQueue.main.async {
+                guard let self = self else {
+                    return
+                }
+
+                self.hasLoadedToday = true
+
+                // Keep changes still waiting to be saved
+                if let log = log, self.pendingSaves[key] == nil {
+                    self.logs[key] = log
+                }
+            }
+        }
+    }
+
+    // Fetches a past day for the calendar
+    func loadLog(for day: Date) {
+
+        let key = NoteStore.dateKey(day)
+
+        guard
+            key < todayKey,
+            !loadedKeys.contains(key),
+            !keysLoading.contains(key),
+            let document = logReference(for: key)
+        else {
+            return
+        }
+
+        keysLoading.insert(key)
+
+        document.getDocument { [weak self] snapshot, error in
+
+            if let error = error {
+                print("Error loading daily log: \(error.localizedDescription)")
+            }
+
+            let log = snapshot.map { DailyLog(data: $0.data() ?? [:]) }
+            let didLoad = error == nil
+
+            DispatchQueue.main.async {
+                guard let self = self else {
+                    return
+                }
+
+                self.keysLoading.remove(key)
+
+                if didLoad {
+                    self.logs[key] = log
+                    self.loadedKeys.insert(key)
+                }
+            }
+        }
+    }
+}
+
+
 // MARK: - FITNESS PROFILE
 
 
@@ -759,6 +998,7 @@ struct FitnessProfile: Codable {
     var activityLevel: String = "Moderately Active"
     var metabolicEquationSex: String = "Prefer not to say"
     var measurementUnits: String = "Metric"
+    var waterGoal: Int = 2500
 
     var isComplete: Bool {
         !sport.isEmpty && !goal.isEmpty
@@ -979,7 +1219,8 @@ final class ProfileStore: ObservableObject {
             "weightKg": profile.weightKg,
             "activityLevel": profile.activityLevel,
             "metabolicEquationSex": profile.metabolicEquationSex,
-            "measurementUnits": profile.measurementUnits
+            "measurementUnits": profile.measurementUnits,
+            "waterGoal": profile.waterGoal
 
         ]
 
@@ -1044,7 +1285,8 @@ final class ProfileStore: ObservableObject {
                 activityLevel: data["activityLevel"] as? String ?? "Moderately Active",
                 metabolicEquationSex: data["metabolicEquationSex"] as? String ?? "Prefer not to say",
                 
-                measurementUnits: data["measurementUnits"] as? String ?? "Metric"
+                measurementUnits: data["measurementUnits"] as? String ?? "Metric",
+                waterGoal: data["waterGoal"] as? Int ?? 2500
 
             )
 
@@ -1743,10 +1985,13 @@ struct MainTabView: View {
 
     @Binding var user: User?
 
+    @Environment(\.scenePhase) private var scenePhase
+
     @StateObject private var mealStore = MealStore()
     @StateObject private var profileStore = ProfileStore()
     @StateObject private var workoutStore = WorkoutStore()
     @StateObject private var noteStore = NoteStore()
+    @StateObject private var dailyLogStore = DailyLogStore()
 
     var body: some View {
 
@@ -1776,7 +2021,7 @@ struct MainTabView: View {
                         .tabItem {
                             Label("Nutrition", systemImage: "fork.knife")
                         }
-                    TrainingPlanView(profileStore: profileStore, workoutStore: workoutStore, mealStore: mealStore, noteStore: noteStore)
+                    TrainingPlanView(profileStore: profileStore, workoutStore: workoutStore, mealStore: mealStore, noteStore: noteStore, dailyLogStore: dailyLogStore)
                         .tabItem { Label("Plan", systemImage: "calendar") }
 
                     FitnessView(workoutStore: workoutStore)
@@ -1788,7 +2033,8 @@ struct MainTabView: View {
                         profileStore: profileStore,
                         workoutStore: workoutStore,
                         mealStore: mealStore,
-                        noteStore: noteStore
+                        noteStore: noteStore,
+                        dailyLogStore: dailyLogStore
                     )
                     .tabItem {
                         Label("Performance", systemImage: "chart.bar.fill")
@@ -1820,6 +2066,13 @@ struct MainTabView: View {
             } else {
 
                 SetupProfileView(profileStore: profileStore)
+            }
+        }
+        .onChange(of: scenePhase) {
+            if scenePhase == .active {
+                dailyLogStore.refreshToday()
+            } else {
+                dailyLogStore.savePendingChanges()
             }
         }
     }
@@ -3525,7 +3778,8 @@ struct EditProfileView: View {
             weightKg: weightKg,
             activityLevel: activityLevel,
             metabolicEquationSex: metabolicEquationSex,
-            measurementUnits: measurementUnits
+            measurementUnits: measurementUnits,
+            waterGoal: profileStore.profile.waterGoal
         )
 
         // Recalculate targets only when a calculation input changed,

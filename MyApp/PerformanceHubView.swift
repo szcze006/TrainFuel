@@ -1,8 +1,7 @@
 import SwiftUI
 
 // Sprint 3 extension. Works with existing ProfileStore, WorkoutStore, MealStore, and SportCoach.
-// Water, calendar notes, and recovery check-ins are local to this device.
-// Logged meals and completed workouts use the existing Firebase-backed stores.
+// Meals, workouts, calendar notes, water, and recovery check-ins use the Firebase-backed stores.
 
 struct SuggestedMeal: Identifiable {
     let id: String
@@ -40,14 +39,12 @@ struct PerformanceHubView: View {
     @ObservedObject var workoutStore: WorkoutStore
     @ObservedObject var mealStore: MealStore
     @ObservedObject var noteStore: NoteStore
+    @ObservedObject var dailyLogStore: DailyLogStore
     @State private var section = 0
-    @AppStorage("sprint3.water.date") private var waterDate = ""
-    @AppStorage("sprint3.water.ml") private var waterML = 0
-    @AppStorage("sprint3.water.goal") private var waterGoal = 2500
 
     private var sport: String { profileStore.profile.sport }
-    private var todayKey: String { Self.dateKey(Date()) }
-    private var todayWater: Int { waterDate == todayKey ? waterML : 0 }
+    private var todayWater: Int { dailyLogStore.todayLog.waterML ?? 0 }
+    private var waterGoal: Int { profileStore.profile.waterGoal }
     private var currentWeekWorkouts: [WorkoutEntry] {
         workoutStore.workouts.filter {
             Calendar.current.isDate($0.date, equalTo: Date(), toGranularity: .weekOfYear)
@@ -68,7 +65,7 @@ struct PerformanceHubView: View {
                 .padding(.horizontal)
                 Group {
                     switch section {
-                    case 0: TrainingPlanView(profileStore: profileStore, workoutStore: workoutStore, mealStore: mealStore, noteStore: noteStore)
+                    case 0: TrainingPlanView(profileStore: profileStore, workoutStore: workoutStore, mealStore: mealStore, noteStore: noteStore, dailyLogStore: dailyLogStore)
                     case 1: nutritionPage
                     case 2: waterPage
                     default: insightsPage
@@ -123,13 +120,16 @@ struct PerformanceHubView: View {
                 Text("Daily hydration").font(.title2.bold())
                 metric("Water today", value: todayWater, goal: waterGoal, unit: "mL")
                 Text("Daily goal (mL): \(waterGoal)")
-                Stepper("Adjust goal", value: $waterGoal, in: 500...6000, step: 250)
-                HStack {
-                    Button("+250 mL") { addWater(250) }
-                    Button("+500 mL") { addWater(500) }
-                }.buttonStyle(.borderedProminent)
-                Button("Undo 250 mL") { addWater(-250) }.buttonStyle(.bordered)
-                Text("Water logs are stored on this device and reset for a new day. Your hydration needs vary with climate, exercise, and sweat losses.")
+                Stepper("Adjust goal", value: $profileStore.profile.waterGoal, in: 500...6000, step: 250)
+                VStack(alignment: .leading, spacing: 20) {
+                    HStack {
+                        Button("+250 mL") { dailyLogStore.addWater(250) }
+                        Button("+500 mL") { dailyLogStore.addWater(500) }
+                    }.buttonStyle(.borderedProminent)
+                    Button("Undo 250 mL") { dailyLogStore.addWater(-250) }.buttonStyle(.bordered)
+                }
+                .disabled(!dailyLogStore.hasLoadedToday)
+                Text("Water logs are saved to your account, with a new log each day. Your hydration needs vary with climate, exercise, and sweat losses.")
                     .font(.footnote).foregroundStyle(.secondary)
             }.padding()
         }
@@ -158,7 +158,7 @@ struct PerformanceHubView: View {
                         Text("\(workout.duration) min").foregroundStyle(.secondary)
                     }
                 }
-                Text("Calories and protein count today's meals. Water is stored locally.")
+                Text("Calories and protein count today's meals.")
                     .font(.caption).foregroundStyle(.secondary)
             }.padding()
         }
@@ -180,15 +180,6 @@ struct PerformanceHubView: View {
         }.frame(maxWidth: .infinity, alignment: .leading).padding()
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
     }
-    private func addWater(_ amount: Int) {
-        if waterDate != todayKey { waterDate = todayKey; waterML = 0 }
-        waterML = max(0, waterML + amount)
-    }
-    private static func dateKey(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter.string(from: date)
-    }
 }
 
 // Shared by the Plan tab and the Performance hub so both show the same calendar and notes.
@@ -197,6 +188,7 @@ struct TrainingCalendarView: View {
     @ObservedObject var workoutStore: WorkoutStore
     @ObservedObject var mealStore: MealStore
     @ObservedObject var noteStore: NoteStore
+    @ObservedObject var dailyLogStore: DailyLogStore
     @State private var selectedDay = Date()
 
     private var dayNote: Binding<String> {
@@ -222,7 +214,9 @@ struct TrainingCalendarView: View {
                 .foregroundStyle(.secondary)
             DatePicker("View day", selection: $selectedDay, displayedComponents: .date)
                 .datePickerStyle(.graphical)
-            if mealStore.isLoadingMeals(on: selectedDay) || workoutStore.isLoadingWorkouts(on: selectedDay) {
+            if mealStore.isLoadingMeals(on: selectedDay)
+                || workoutStore.isLoadingWorkouts(on: selectedDay)
+                || dailyLogStore.isLoadingLog(for: selectedDay) {
                 ProgressView("Loading this day...")
                     .frame(maxWidth: .infinity)
             }
@@ -258,6 +252,11 @@ struct TrainingCalendarView: View {
                     }
                 }
             }
+            let dayLog = dailyLogStore.log(for: selectedDay)
+            Text("Hydration and recovery").font(.headline)
+            Text("Water: \(dayLog.waterML.map { "\($0) mL" } ?? "Not logged")")
+            Text("Sleep: \(dayLog.sleepHours.map { "\($0) hours" } ?? "Not logged")")
+            Text("Soreness: \(dayLog.soreness.map { "\($0)/5" } ?? "Not logged")")
             Text("Notes for \(selectedDay.formatted(.dateTime.month(.abbreviated).day()))").font(.headline)
             TextEditor(text: dayNote).frame(height: 90)
                 .overlay(RoundedRectangle(cornerRadius: 10).stroke(.gray.opacity(0.3)))
@@ -269,6 +268,7 @@ struct TrainingCalendarView: View {
             mealStore.loadMeals(on: selectedDay)
             workoutStore.loadWorkouts(on: selectedDay)
             noteStore.loadNote(for: selectedDay)
+            dailyLogStore.loadLog(for: selectedDay)
         }
     }
 }
