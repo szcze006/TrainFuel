@@ -2865,68 +2865,69 @@ struct NutritionView: View {
 
             VStack(spacing: 12) {
 
-                
-                VStack(spacing: 12) {
+                // Totals and meals share one list so the whole screen scrolls
+                // and the meals can't get squeezed out by the cards above.
+                List {
 
-                    NutritionProgressRow(
-                        title: "Calories",
-                        consumed: mealStore.totalCalories(on: Date()),
-                        target: profileStore.profile.calorieGoal,
-                        unit: "kcal"
-                    )
+                    VStack(spacing: 12) {
 
-                    NutritionProgressRow(
-                        title: "Protein",
-                        consumed: mealStore.totalProtein(on: Date()),
-                        target: profileStore.profile.proteinGoal,
-                        unit: "g"
-                    )
+                        NutritionProgressRow(
+                            title: "Calories",
+                            consumed: mealStore.totalCalories(on: Date()),
+                            target: profileStore.profile.calorieGoal,
+                            unit: "kcal"
+                        )
 
-                    NutritionProgressRow(
-                        title: "Carbohydrates",
-                        consumed: mealStore.totalCarbs(on: Date()),
-                        target: profileStore.profile.carbsGoal,
-                        unit: "g"
-                    )
+                        NutritionProgressRow(
+                            title: "Protein",
+                            consumed: mealStore.totalProtein(on: Date()),
+                            target: profileStore.profile.proteinGoal,
+                            unit: "g"
+                        )
 
-                    NutritionProgressRow(
-                        title: "Fat",
-                        consumed: mealStore.totalFat(on: Date()),
-                        target: profileStore.profile.fatGoal,
-                        unit: "g"
-                    )
+                        NutritionProgressRow(
+                            title: "Carbohydrates",
+                            consumed: mealStore.totalCarbs(on: Date()),
+                            target: profileStore.profile.carbsGoal,
+                            unit: "g"
+                        )
 
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Where today's calories come from").font(.headline)
-                        HStack {
-                            Label("Protein: \\(macroCalories.protein) kcal", systemImage: "circle.fill")
-                            Spacer()
-                            Text("Carbs: \\(macroCalories.carbs) kcal")
-                        }.font(.caption)
-                        Text("Fat: \\(macroCalories.fat) kcal").font(.caption)
-                        Text("Calculated from macros (4/4/9 kcal per gram); labels may differ.")
-                            .font(.caption2).foregroundStyle(.secondary)
+                        NutritionProgressRow(
+                            title: "Fat",
+                            consumed: mealStore.totalFat(on: Date()),
+                            target: profileStore.profile.fatGoal,
+                            unit: "g"
+                        )
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Where today's calories come from").font(.headline)
+                            HStack {
+                                Label("Protein: \(macroCalories.protein) kcal", systemImage: "circle.fill")
+                                Spacer()
+                                Text("Carbs: \(macroCalories.carbs) kcal")
+                            }.font(.caption)
+                            Text("Fat: \(macroCalories.fat) kcal").font(.caption)
+                            Text("Calculated from macros (4/4/9 kcal per gram); labels may differ.")
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
+                        .padding().frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.white, in: RoundedRectangle(cornerRadius: 14))
+
+                        Text(
+                            profileStore.profile.hasValidPersonalDetails
+                            ? "Targets are estimates based on your profile, not medical advice."
+                            : "Default targets shown. Add your age, height and weight in Edit Training Plan for personalized estimates."
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .padding().frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.white, in: RoundedRectangle(cornerRadius: 14))
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
 
-                    Text(
-                        profileStore.profile.hasValidPersonalDetails
-                        ? "Targets are estimates based on your profile, not medical advice."
-                        : "Default targets shown. Add your age, height and weight in Edit Training Plan for personalized estimates."
-                    )
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .padding(.horizontal)
-
-
-               if todayMeals.isEmpty {
-
-                    // Scrolls like the meal list so the screen never overflows.
-                    ScrollView {
+                    if todayMeals.isEmpty {
 
                         VStack(spacing: 12) {
 
@@ -2946,11 +2947,10 @@ struct NutritionView: View {
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.top, 24)
-                    }
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
 
-                } else {
-
-                    List {
+                    } else {
 
                         Section("Today's Meals") {
 
@@ -2996,8 +2996,8 @@ struct NutritionView: View {
                             }
                         }
                     }
-                    .scrollContentBackground(.hidden)
                 }
+                .scrollContentBackground(.hidden)
 
                 Button {
                     showAddMeal = true
