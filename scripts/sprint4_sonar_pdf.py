@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render a dashboard-derived SonarQube Sprint 4 PDF, with explicit source disclosure."""
+"""Render a dashboard-derived SonarQube Sprint 4 PDF, with explicit source disclosure.\n\nInputs are the November 3 dashboard screenshots supplied by the project owner.\n"""
 from datetime import datetime, timezone
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet
