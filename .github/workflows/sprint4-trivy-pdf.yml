@@ -1,0 +1,44 @@
+name: Sprint 4 Trivy PDF
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  trivy-pdf:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out TrainFuel
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
+      - name: Scan project using Trivy
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: json
+          scanners: vuln
+          severity: CRITICAL,HIGH,MEDIUM,LOW
+          output: trivy-sprint4.json
+          exit-code: '0'
+      - name: Generate PDF from Trivy output
+        run: |
+          python -m pip install --quiet reportlab
+          mkdir -p docs/Sprint-4-Static-Analysis
+          export SCAN_COMMIT="$(git rev-parse --short HEAD)"
+          export TRIVY_VERSION="$(trivy --version | head -1)"
+          python scripts/sprint4_trivy_pdf.py trivy-sprint4.json docs/Sprint-4-Static-Analysis/Trivy-Report.pdf
+      - name: Upload PDF as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sprint4-trivy-pdf
+          path: docs/Sprint-4-Static-Analysis/Trivy-Report.pdf
+      - name: Commit PDF report into repository
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/Sprint-4-Static-Analysis/Trivy-Report.pdf
+          git diff --cached --quiet || (git commit -m 'Add generated Sprint 4 Trivy scan PDF' && git push)
