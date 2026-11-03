@@ -1699,8 +1699,6 @@ struct SignUpView: View {
 
     @Binding var user: User?
 
-    @State private var showBarcodeScanner = false
-
     @State private var name = ""
     @State private var email = ""
     @State private var password = ""
@@ -3062,6 +3060,7 @@ struct AddMealView: View {
     @Environment(\.dismiss) private var dismiss
 
     @ObservedObject var mealStore: MealStore
+    @State private var showBarcodeScanner = false
 
     @State private var name = ""
     @State private var calories = ""
