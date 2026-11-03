@@ -78,6 +78,7 @@ import VisionKit
 struct TrainFuelBarcodeEntry: View {
     @State private var food: ScannedFood?
     @State private var grams = 100.0
+    @State private var manualBarcode = ""
     @State private var errorMessage: String?
     @State private var isLoading = false
     let onUseFood: (ScannedFood, Double) -> Void
@@ -95,6 +96,20 @@ struct TrainFuelBarcodeEntry: View {
                 Text("Barcode scanning requires a supported iPhone with camera access.")
                     .foregroundStyle(.secondary)
             }
+            HStack {
+                TextField("Enter barcode numbers", text: $manualBarcode)
+                    .keyboardType(.numberPad)
+                    .textFieldStyle(.roundedBorder)
+                Button("Look up") {
+                    Task { await loadFood(manualBarcode.trimmingCharacters(in: .whitespacesAndNewlines)) }
+                }
+                .disabled(manualBarcode.count < 8 || isLoading)
+            }
+            #if targetEnvironment(simulator)
+            Text("Camera scanning is unavailable in the simulator. Enter a barcode above to test the food API.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            #endif
             if isLoading { ProgressView("Looking up nutrition…") }
             if let food {
                 Text(food.name).font(.title3.bold())
